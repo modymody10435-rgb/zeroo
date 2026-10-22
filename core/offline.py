@@ -70,7 +70,33 @@ _retry_after: float = 0.0
 _client_cache: Any = None
 _worksheet_cache: Dict[str, Any] = {}
 
-_ddl_done = False
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sheet TEXT NOT NULL,
+    op TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_sheet ON outbox(sheet);
+CREATE TABLE IF NOT EXISTS snapshot (
+    sheet TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS auth_cache (
+    username TEXT PRIMARY KEY COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    updated_at TEXT NOT NULL
+);
+"""
 
 
 class SyncConfigError(Exception):
@@ -133,6 +159,21 @@ def spreadsheet_key() -> str:
 def db_path() -> str:
     with _cfg_lock:
         return _db_path
+
+
+def init_db() -> str:
+    """يُهيّئ قاعدة البيانات المحلية (المجلد + كل الجداول) ويعيد مسارها.
+
+    تُستدعى في أول تشغيل وكل مرة قبل أي قراءة/كتابة — آمنة ومتكررة
+    (CREATE TABLE IF NOT EXISTS) ولا تفشل لو حُذف الملف لاحقًا.
+    """
+    path = db_path()
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with _connect() as con:
+        con.execute("SELECT 1 FROM outbox LIMIT 1")
+    return path
 
 
 # --------------------------------------------------------------------------- #
@@ -258,39 +299,10 @@ def _new_connection() -> sqlite3.Connection:
         con.execute("PRAGMA synchronous=NORMAL")
     except sqlite3.Error:
         pass
-    global _ddl_done
-    if not _ddl_done:
-        con.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS outbox (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sheet TEXT NOT NULL,
-                op TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                last_error TEXT DEFAULT ''
-            );
-            CREATE INDEX IF NOT EXISTS idx_outbox_sheet ON outbox(sheet);
-            CREATE TABLE IF NOT EXISTS snapshot (
-                sheet TEXT PRIMARY KEY,
-                payload TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS auth_cache (
-                username TEXT PRIMARY KEY COLLATE NOCASE,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'user',
-                updated_at TEXT NOT NULL
-            );
-            """
-        )
-        con.commit()
-        _ddl_done = True
+    # يُنفَّذ دائمًا (CREATE IF NOT EXISTS رخيص وآمن) حتى لا تفشل أي استعلامات
+    # إن حُذف/تُبدّل ملف القاعدة أثناء عمل البرنامج أو في أول تشغيل.
+    con.executescript(_SCHEMA_SQL)
+    con.commit()
     return con
 
 
@@ -616,9 +628,12 @@ def pending_ops() -> List[Dict[str, Any]]:
 
 
 def pending_count() -> int:
-    with _connect() as con:
-        row = con.execute("SELECT COUNT(*) AS n FROM outbox").fetchone()
-    return int(row["n"] if row else 0)
+    try:
+        with _connect() as con:
+            row = con.execute("SELECT COUNT(*) AS n FROM outbox").fetchone()
+        return int(row["n"] if row else 0)
+    except sqlite3.Error:
+        return 0
 
 
 def _delete_op(op_id: int) -> None:
@@ -1093,6 +1108,7 @@ __all__ = [
     "get_cached_user",
     "has_snapshot",
     "initial_pull",
+    "init_db",
     "is_network_error",
     "is_online",
     "local_count",

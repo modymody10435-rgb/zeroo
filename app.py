@@ -1600,6 +1600,10 @@ def page_users() -> None:
 def main() -> None:
     cfg = load_config()
     try:
+        offline.init_db()          # تهيئة القاعدة المحلية (إنشاء الجداول) فورًا
+    except Exception as exc:  # noqa: BLE001
+        st.session_state["_db_error"] = f"تعذر تهيئة قاعدة البيانات المحلية: {exc}"
+    try:
         offline.configure(cfg)      # يلتقط بيانات المزامنة للخيط الخلفي
         offline.ensure_worker()     # خيط مزامنة تلقائي: يدفع الطابور ويسحب البيانات في الخلفية
         offline.flush_if_pending()  # دفعة فورية عند فتح التطبيق (سريعة)
