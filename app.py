@@ -4,8 +4,14 @@
     1. 🏠 الصفحة الرئيسية (Dashboard)     — الافتراضية بعد الدخول
     2. 📤 تسجيل سحب (Withdrawal Page)
     3. ➕ إدارة الأصناف (Item Management)
-    4. 📊 التقارير والسجلات (Reports & Logs)
-    5. 👤 إدارة المستخدمين (User Management) — للمدير فقط
+    4. 🧬 قسم PCR (PCR Section)
+    5. 🧪 قسم الكيماويات (Chemicals Section)
+    6. 🗂️ قسم المكتبية (Office Supplies Section)
+    7. 💻 قسم مستلزمات الكمبيوتر (Computer Supplies Section)
+    8. 📄 استمارات الهيئة — الوارد والصرف (Authority Forms)
+    9. 🗑️ تكهين الأجهزة (Device Decommissioning)
+    10. 📊 التقارير والسجلات (Reports & Logs)
+    11. 👤 إدارة المستخدمين (User Management) — للمدير فقط
 
 المميزات:
     - نظام مستخدمين متعدد (ورقة Users) مع إضافة/حذف/تغيير كلمات المرور.
@@ -29,6 +35,7 @@ import os
 import subprocess
 from datetime import date, datetime
 
+import pandas as pd
 import streamlit as st
 
 from core import offline
@@ -36,15 +43,46 @@ from core.auth import current_username, is_admin, is_logged_in, login_form, logo
 from core.config import load_config
 from core.db import DataError, configure, ensure_schema, spreadsheet_info, to_number
 from core.services import (
+    CHEMICALS_STORAGE_SECTION,
+    COMPUTER_STORAGE_SECTION,
+    DEVICE_CONDITIONS,
+    DEVICE_CONDITION_DEFAULT,
+    DEVICE_STATUSES,
+    DEVICE_STATUS_DEFAULT,
+    DEVICE_STATUS_DECOMMISSIONED,
+    OFFICE_STORAGE_SECTION,
+    PCR_STORAGE_SECTION,
+    PRODUCT_CATEGORIES,
+    PRODUCT_CATEGORY_CHEMICALS,
+    PRODUCT_CATEGORY_COMPUTER,
+    PRODUCT_CATEGORY_GENERAL,
+    PRODUCT_CATEGORY_OFFICE,
+    PRODUCT_CATEGORY_PCR,
     add_stock_item,
     clear_test_data,
+    decommission_device,
+    delete_authority_form_item,
     delete_product,
+    get_authority_form_items,
+    get_authority_form_receipts,
+    get_authority_form_withdrawals,
+    get_authority_forms_count,
+    get_chemical_products,
+    get_computer_products,
     get_movements,
+    get_office_products,
+    get_pcr_products,
     get_products,
     get_withdrawals,
+    normalize_category,
+    receive_authority_forms,
     record_movement,
     sell_draw_item,
     update_product,
+    withdraw_authority_forms,
+    withdraw_chemical,
+    withdraw_computer_item,
+    withdraw_office_item,
 )
 from core.styles import header, inject_styles, metric_card
 from core.users import (
@@ -234,6 +272,12 @@ PAGES = [
     "🏠 الصفحة الرئيسية (Dashboard)",
     "📤 تسجيل سحب (Withdrawal Page)",
     "➕ إدارة الأصناف (Item Management)",
+    "🧬 قسم PCR (PCR Section)",
+    "🧪 قسم الكيماويات (Chemicals Section)",
+    "🗂️ قسم المكتبية (Office Supplies Section)",
+    "💻 قسم مستلزمات الكمبيوتر (Computer Supplies Section)",
+    "📄 استمارات الهيئة — الوارد والصرف (Authority Forms)",
+    "🗑️ تكهين الأجهزة (Device Decommissioning)",
     "📊 التقارير والسجلات (Reports & Logs)",
 ]
 ADMIN_PAGES = ["👤 إدارة المستخدمين (User Management - Admin only)"]
@@ -899,6 +943,43 @@ def _item_label(row) -> str:
     return f"{base} — أضافه: {added}" if added else base
 
 
+def _category_options(current: str = "") -> list:
+    value = normalize_category(current)
+    options = list(PRODUCT_CATEGORIES)
+    if value and value not in options:
+        options.append(value)
+    return options
+
+
+def _render_inventory_table(df, empty_message: str) -> None:
+    if df.empty:
+        st.info(empty_message)
+        return
+    view = df.copy()
+    if "added_by" not in view.columns:
+        view["added_by"] = ""
+    if "category" not in view.columns:
+        view["category"] = PRODUCT_CATEGORY_GENERAL
+    view["category"] = view["category"].apply(normalize_category)
+    st.dataframe(
+        view[
+            ["product_code", "product_name", "category", "unit", "current_stock", "storage_location", "added_by"]
+        ].rename(
+            columns={
+                "product_code": "الكود",
+                "product_name": "اسم الصنف",
+                "category": "التصنيف",
+                "unit": "الوحدة",
+                "current_stock": "الرصيد الحالي",
+                "storage_location": "مكان التخزين",
+                "added_by": "أضافه",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
 def page_items() -> None:
     header("➕ إدارة الأصناف", "إضافة صنف جديد أو تعديل بياناته أو حذفه من المخزون")
     st.markdown(ITEMS_INPUT_LTR_CSS, unsafe_allow_html=True)
@@ -907,25 +988,45 @@ def page_items() -> None:
     if products.empty:
         st.info("لا توجد أصناف بعد — أضف أول صنف من تبويب «إضافة صنف».")
     else:
-        view = products.copy()
-        if "added_by" not in view.columns:
-            view["added_by"] = ""
-        st.markdown("#### 📦 كل الأصناف")
-        st.dataframe(
-            view[
-                ["product_code", "product_name", "unit", "current_stock", "added_by"]
-            ].rename(
-                columns={
-                    "product_code": "الكود",
-                    "product_name": "اسم الصنف",
-                    "unit": "الوحدة",
-                    "current_stock": "الرصيد الحالي",
-                    "added_by": "أضافه",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
+        if "category" not in products.columns:
+            products = products.copy()
+            products["category"] = PRODUCT_CATEGORY_GENERAL
+        categories = products["category"].apply(normalize_category)
+        is_pcr = categories == PRODUCT_CATEGORY_PCR
+        is_chemical = categories == PRODUCT_CATEGORY_CHEMICALS
+        is_office = categories == PRODUCT_CATEGORY_OFFICE
+        is_computer = categories == PRODUCT_CATEGORY_COMPUTER
+        pcr_products = products[is_pcr]
+        chemical_products = products[is_chemical]
+        office_products = products[is_office]
+        computer_products = products[is_computer]
+        general_products = products[~is_pcr & ~is_chemical & ~is_office & ~is_computer]
+        st.markdown("#### 🧬 قسم PCR")
+        st.caption("أصناف PCR مخزّنة ومُدارة بشكل منفصل عن باقي المخزن.")
+        _render_inventory_table(
+            pcr_products,
+            "لا توجد أصناف PCR بعد — أضف صنفًا واختر التصنيف «PCR».",
         )
+        st.markdown("#### 🧪 قسم الكيماويات")
+        st.caption("المواد الكيميائية مخزّنة ومُدارة في قسم مستقل مع بيانات التصنيع والصلاحية.")
+        _render_inventory_table(
+            chemical_products,
+            "لا توجد مواد كيميائية بعد — أضف مادة واختر التصنيف «كيماويات».",
+        )
+        st.markdown("#### 🗂️ قسم المكتبية")
+        st.caption("الأصناف المكتبية مخزّنة ومُدارة في قسم مستقل مع الكميات والتواريخ.")
+        _render_inventory_table(
+            office_products,
+            "لا توجد أصناف مكتبية بعد — أضف صنفًا واختر التصنيف «المكتبية».",
+        )
+        st.markdown("#### 💻 قسم مستلزمات الكمبيوتر")
+        st.caption("مستلزمات الكمبيوتر مخزّنة ومُدارة في قسم مستقل مع المواصفات والتصنيف.")
+        _render_inventory_table(
+            computer_products,
+            "لا توجد مستلزمات كمبيوتر بعد — أضف صنفًا واختر التصنيف «مستلزمات الكمبيوتر».",
+        )
+        st.markdown("#### 📦 المخزن العام")
+        _render_inventory_table(general_products, "لا توجد أصناف في المخزن العام.")
 
     tab_add, tab_edit, tab_delete = st.tabs(
         ["➕ إضافة صنف", "✏️ تعديل صنف", "🗑️ حذف صنف"]
@@ -976,6 +1077,10 @@ def _render_add_item() -> None:
             "add_sup",
             "add_expiry",
             "add_notes",
+            "add_category",
+            "add_location",
+            "add_serial",
+            "add_device_status",
         ):
             st.session_state.pop(key, None)
 
@@ -1014,6 +1119,57 @@ def _render_add_item() -> None:
         expiry_date = st.date_input(
             "تاريخ الانتهاء", value=None, width="stretch", key="add_expiry"
         )
+    c10, c11 = st.columns(2)
+    with c10:
+        category = st.selectbox(
+            "التصنيف / قسم المخزن",
+            options=PRODUCT_CATEGORIES,
+            index=0,
+            width="stretch",
+            key="add_category",
+        )
+    with c11:
+        storage_location = st.text_input(
+            "مكان التخزين",
+            placeholder=f"مثال: {PCR_STORAGE_SECTION}",
+            width="stretch",
+            key="add_location",
+        )
+    serial_number = ""
+    device_status = ""
+    if category == PRODUCT_CATEGORY_PCR:
+        st.caption(f"🧬 أصناف PCR تُخزَّن تلقائيًا في «{PCR_STORAGE_SECTION}» عند ترك مكان التخزين فارغًا.")
+        c12, c13 = st.columns(2)
+        with c12:
+            serial_number = st.text_input(
+                "الرقم التسلسلي للجهاز",
+                placeholder="",
+                width="stretch",
+                key="add_serial",
+            )
+        with c13:
+            device_status = st.selectbox(
+                "حالة الجهاز",
+                options=DEVICE_STATUSES,
+                index=0,
+                width="stretch",
+                key="add_device_status",
+            )
+    elif category == PRODUCT_CATEGORY_CHEMICALS:
+        st.caption(
+            f"🧪 المواد الكيميائية تُخزَّن تلقائيًا في «{CHEMICALS_STORAGE_SECTION}» "
+            "عند ترك مكان التخزين فارغًا."
+        )
+    elif category == PRODUCT_CATEGORY_OFFICE:
+        st.caption(
+            f"🗂️ الأصناف المكتبية تُخزَّن تلقائيًا في «{OFFICE_STORAGE_SECTION}». "
+            "لإدخال الكراتين والوحدات داخل الكرتونة استخدم صفحة «قسم المكتبية»."
+        )
+    elif category == PRODUCT_CATEGORY_COMPUTER:
+        st.caption(
+            f"💻 مستلزمات الكمبيوتر تُخزَّن تلقائيًا في «{COMPUTER_STORAGE_SECTION}». "
+            "لإدخال المواصفات والأرقام التسلسلية والتصنيف استخدم صفحة «قسم مستلزمات الكمبيوتر»."
+        )
     notes = st.text_area("ملاحظات", placeholder="", height=90, width="stretch", key="add_notes")
     submitted = st.button(
         "➕ إضافة الصنف", type="primary", use_container_width=True, key="add_submit"
@@ -1030,6 +1186,10 @@ def _render_add_item() -> None:
             manufacturer=manufacturer,
             supplier=supplier,
             expiry_date=expiry_date.strftime("%Y-%m-%d") if expiry_date else "",
+            category=category,
+            storage_location=storage_location,
+            serial_number=serial_number,
+            device_status=device_status,
         )
         if ok:
             st.success(msg)
@@ -1082,6 +1242,10 @@ def _render_edit_item() -> None:
     cur_sup = _product_note(product.get("supplier"))
     cur_notes = _product_note(product.get("notes"))
     cur_location = _product_note(product.get("storage_location"))
+    cur_category = normalize_category(product.get("category"))
+    cur_serial = _product_note(product.get("serial_number"))
+    cur_status_raw = _product_note(product.get("device_status"))
+    cur_status = cur_status_raw or DEVICE_STATUS_DEFAULT
     cur_stock = to_number(product.get("current_stock"))
     cur_min = to_number(product.get("min_stock"))
     cur_added = _product_note(product.get("date_added"))
@@ -1115,6 +1279,39 @@ def _render_edit_item() -> None:
             "مكان التخزين", value=cur_location, placeholder="", width="stretch",
             key=f"edit_location_{code}",
         )
+    category_options = _category_options(cur_category)
+    category_v = st.selectbox(
+        "التصنيف / قسم المخزن",
+        options=category_options,
+        index=category_options.index(cur_category),
+        width="stretch",
+        key=f"edit_category_{code}",
+    )
+    serial_v = cur_serial
+    status_v = cur_status_raw
+    if category_v == PRODUCT_CATEGORY_PCR:
+        st.caption(f"🧬 أصناف PCR تُخزَّن تلقائيًا في «{PCR_STORAGE_SECTION}» عند ترك مكان التخزين فارغًا.")
+        status_current = status_v or DEVICE_STATUS_DEFAULT
+        status_options = list(DEVICE_STATUSES)
+        if status_current not in status_options:
+            status_options.append(status_current)
+        c12, c13 = st.columns(2)
+        with c12:
+            serial_v = st.text_input(
+                "الرقم التسلسلي للجهاز",
+                value=cur_serial,
+                placeholder="",
+                width="stretch",
+                key=f"edit_serial_{code}",
+            )
+        with c13:
+            status_v = st.selectbox(
+                "حالة الجهاز",
+                options=status_options,
+                index=status_options.index(status_current),
+                width="stretch",
+                key=f"edit_status_{code}",
+            )
     q1, q2, q3 = st.columns(3)
     with q1:
         stock_v = st.number_input(
@@ -1188,6 +1385,9 @@ def _render_edit_item() -> None:
         "supplier": str(sup_v or "").strip(),
         "expiry_date": expiry_v.strftime("%Y-%m-%d") if expiry_v else "",
         "notes": str(notes_v or "").strip(),
+        "category": category_v,
+        "serial_number": str(serial_v or "").strip(),
+        "device_status": str(status_v or "").strip(),
     }
     ok, msg = update_product(code, updates)
     if not ok:
@@ -1240,8 +1440,2518 @@ def _render_delete_item() -> None:
             st.error(msg)
 
 
+def _render_product_delete_form(
+    df,
+    form_key: str,
+    empty_message: str,
+    heading: str = "🗑️ حذف صنف نهائيًا",
+) -> None:
+    if df.empty:
+        st.info(empty_message)
+        return
+
+    labels = {
+        _item_label(row): str(row["product_code"])
+        for _, row in df.iterrows()
+    }
+    with st.form(f"delete_{form_key}_form"):
+        st.markdown(f"#### {heading}")
+        st.caption(
+            "سيُحذف الصنف نهائيًا من ورقة Products في Google Sheets ومن النسخة المحلية. "
+            "تبقى سجلات السحوبات والحركات السابقة محفوظة."
+        )
+        choice = st.selectbox(
+            "اختر الصنف",
+            options=list(labels.keys()),
+            index=None,
+            placeholder="",
+            width="stretch",
+        )
+        confirmed = st.checkbox(
+            "أؤكد رغبتي في حذف هذا الصنف نهائيًا", width="stretch"
+        )
+        submitted = st.form_submit_button(
+            "🗑️ حذف الصنف", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+    if choice is None:
+        st.warning("⚠️ يرجى اختيار الصنف المراد حذفه.")
+        return
+    if not confirmed:
+        st.warning("⚠️ يرجى تحديد مربع التأكيد قبل الحذف.")
+        return
+
+    ok, msg = delete_product(labels[choice], force=True)
+    if ok:
+        st.success(msg)
+        st.rerun()
+    else:
+        st.error(msg)
+
+
 # --------------------------------------------------------------------------- #
-#                        4) صفحة التقارير والسجلات
+#                        4) صفحة قسم PCR المستقل
+# --------------------------------------------------------------------------- #
+def _pcr_device_view(df) -> pd.DataFrame:
+    view = df.copy()
+    for column, default in (
+        ("serial_number", ""),
+        ("manufacturer", ""),
+        ("storage_location", ""),
+        ("device_status", ""),
+    ):
+        if column not in view.columns:
+            view[column] = default
+    view["_quantity"] = view["current_stock"].apply(to_number)
+    view["serial_number"] = view["serial_number"].apply(
+        lambda value: _product_note(value) or "—"
+    )
+    view["manufacturer"] = view["manufacturer"].apply(
+        lambda value: _product_note(value) or "—"
+    )
+    view["storage_location"] = view["storage_location"].apply(
+        lambda value: _product_note(value) or PCR_STORAGE_SECTION
+    )
+    view["device_status"] = view["device_status"].apply(
+        lambda value: _product_note(value) or "غير محدد"
+    )
+    return view[
+        [
+            "product_name",
+            "serial_number",
+            "manufacturer",
+            "storage_location",
+            "_quantity",
+            "device_status",
+        ]
+    ].rename(
+        columns={
+            "product_name": "اسم الجهاز",
+            "serial_number": "الرقم التسلسلي",
+            "manufacturer": "اسم الشركة المصنعة",
+            "storage_location": "مكان التخزين",
+            "_quantity": "الكمية",
+            "device_status": "حالة الجهاز",
+        }
+    )
+
+
+def _render_pcr_devices_table(df, empty_message: str) -> None:
+    if df.empty:
+        st.info(empty_message)
+        return
+    st.dataframe(_pcr_device_view(df), use_container_width=True, hide_index=True)
+
+
+def _render_pcr_add_device(pcr) -> None:
+    existing_serials = {
+        _product_note(value).lower()
+        for value in pcr.get("serial_number", [])
+        if _product_note(value)
+    }
+    existing_codes = {
+        str(value).strip().lower() for value in pcr.get("product_code", []) if str(value).strip()
+    }
+
+    with st.form("pcr_add_device_form", clear_on_submit=True):
+        st.markdown("#### ➕ إضافة جهاز PCR")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            device_name = st.text_input("اسم الجهاز *", placeholder="", width="stretch")
+        with c2:
+            serial_number = st.text_input("الرقم التسلسلي *", placeholder="", width="stretch")
+        with c3:
+            manufacturer = st.text_input("اسم الشركة المصنعة", placeholder="", width="stretch")
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            storage_location = st.text_input(
+                "مكان التخزين", value=PCR_STORAGE_SECTION, width="stretch"
+            )
+        with c5:
+            quantity = st.number_input(
+                "الكمية", min_value=0.0, step=1.0, value=None, placeholder="", width="stretch"
+            )
+        with c6:
+            device_status = st.selectbox(
+                "حالة الجهاز", options=DEVICE_STATUSES, index=0, width="stretch"
+            )
+        notes = st.text_area("ملاحظات", placeholder="", height=80, width="stretch")
+        submitted = st.form_submit_button(
+            "➕ إضافة الجهاز", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    device_name = str(device_name or "").strip()
+    serial_number = str(serial_number or "").strip()
+    if not device_name:
+        st.error("اسم الجهاز مطلوب.")
+        return
+    if not serial_number:
+        st.error("الرقم التسلسلي مطلوب.")
+        return
+    if serial_number.lower() in existing_serials:
+        st.error(f"الرقم التسلسلي «{serial_number}» مسجّل مسبقًا لجهاز آخر.")
+        return
+
+    code = f"PCR-{serial_number}"
+    base_code = code
+    suffix = 2
+    while code.lower() in existing_codes:
+        code = f"{base_code}-{suffix}"
+        suffix += 1
+
+    ok, msg = add_stock_item(
+        device_name,
+        quantity,
+        "جهاز",
+        code=code,
+        notes=notes,
+        manufacturer=manufacturer,
+        category=PRODUCT_CATEGORY_PCR,
+        storage_location=storage_location,
+        serial_number=serial_number,
+        device_status=device_status,
+    )
+    if ok:
+        st.success(msg)
+        st.rerun()
+    else:
+        st.error(msg)
+
+
+def _render_pcr_edit_device(pcr) -> None:
+    if pcr.empty:
+        st.info("لا توجد أجهزة PCR لتعديلها.")
+        return
+
+    labels = {}
+    for _, row in pcr.iterrows():
+        serial = _product_note(row.get("serial_number")) or "بدون رقم تسلسلي"
+        labels[
+            f'{_product_note(row.get("product_name")) or "جهاز"} — {serial} '
+            f'[{row["product_code"]}]'
+        ] = str(row["product_code"])
+    choice = st.selectbox(
+        "اختر جهاز PCR المراد تعديله",
+        options=list(labels.keys()),
+        index=None,
+        placeholder="",
+        width="stretch",
+        key="pcr_edit_device_select",
+    )
+    if choice is None:
+        st.caption("اختر جهازًا لعرض بياناته وتعديلها.")
+        return
+
+    code = labels[choice]
+    product = next(
+        (r for _, r in pcr.iterrows() if str(r["product_code"]).strip() == code),
+        None,
+    )
+    if product is None:
+        st.warning("لم يتم العثور على الجهاز المحدد.")
+        return
+
+    cur_name = _product_note(product.get("product_name"))
+    cur_serial = _product_note(product.get("serial_number"))
+    cur_manufacturer = _product_note(product.get("manufacturer"))
+    cur_location = _product_note(product.get("storage_location")) or PCR_STORAGE_SECTION
+    cur_quantity = to_number(product.get("current_stock"))
+    cur_status = _product_note(product.get("device_status")) or DEVICE_STATUS_DEFAULT
+    cur_notes = _product_note(product.get("notes"))
+    cur_unit = _product_note(product.get("unit")) or "جهاز"
+
+    status_options = list(DEVICE_STATUSES)
+    if cur_status not in status_options:
+        status_options.append(cur_status)
+
+    with st.form(f"pcr_edit_device_form_{code}"):
+        st.markdown(f"#### ✏️ تعديل الجهاز `{code}`")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            name_v = st.text_input("اسم الجهاز *", value=cur_name, width="stretch")
+        with c2:
+            serial_v = st.text_input("الرقم التسلسلي *", value=cur_serial, width="stretch")
+        with c3:
+            manufacturer_v = st.text_input(
+                "اسم الشركة المصنعة", value=cur_manufacturer, width="stretch"
+            )
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            location_v = st.text_input(
+                "مكان التخزين", value=cur_location, width="stretch"
+            )
+        with c5:
+            quantity_v = st.number_input(
+                "الكمية", min_value=0.0, step=1.0, value=cur_quantity, width="stretch"
+            )
+        with c6:
+            status_v = st.selectbox(
+                "حالة الجهاز",
+                options=status_options,
+                index=status_options.index(cur_status),
+                width="stretch",
+            )
+        notes_v = st.text_area("ملاحظات", value=cur_notes, height=80, width="stretch")
+        submitted = st.form_submit_button(
+            "💾 حفظ تعديلات الجهاز", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    name_v = str(name_v or "").strip()
+    serial_v = str(serial_v or "").strip()
+    if not name_v:
+        st.error("اسم الجهاز مطلوب.")
+        return
+    if not serial_v:
+        st.error("الرقم التسلسلي مطلوب.")
+        return
+
+    other_serials = {
+        _product_note(row.get("serial_number")).lower()
+        for _, row in pcr.iterrows()
+        if str(row["product_code"]).strip() != code and _product_note(row.get("serial_number"))
+    }
+    if serial_v.lower() in other_serials:
+        st.error(f"الرقم التسلسلي «{serial_v}» مسجّل مسبقًا لجهاز آخر.")
+        return
+
+    new_quantity = to_number(quantity_v, -1)
+    if new_quantity < 0:
+        st.error("الكمية يجب أن تكون صفرًا أو أكثر.")
+        return
+
+    ok, msg = update_product(
+        code,
+        {
+            "product_name": name_v,
+            "unit": cur_unit,
+            "manufacturer": str(manufacturer_v or "").strip(),
+            "storage_location": str(location_v or "").strip(),
+            "current_stock": new_quantity,
+            "notes": str(notes_v or "").strip(),
+            "category": PRODUCT_CATEGORY_PCR,
+            "serial_number": serial_v,
+            "device_status": status_v,
+        },
+    )
+    if not ok:
+        st.error(msg)
+        return
+
+    delta = new_quantity - cur_quantity
+    if abs(delta) > 1e-9:
+        record_movement(
+            order_no="",
+            product_code=code,
+            product_name=name_v,
+            qty=delta,
+            balance_after=new_quantity,
+            person=current_username() or "تعديل جهاز PCR",
+            movement_type="تعديل رصيد",
+            notes=f"تعديل كمية جهاز PCR من {cur_quantity:g} إلى {new_quantity:g}",
+        )
+    st.success(msg)
+    st.rerun()
+
+
+def page_pcr() -> None:
+    header("🧬 قسم PCR", "تتبع أجهزة PCR: الاسم، الرقم التسلسلي، الشركة المصنعة، الموقع، الكمية والحالة")
+    st.caption(
+        f"يعرض هذا القسم أجهزة تصنيف «{PRODUCT_CATEGORY_PCR}» فقط. "
+        f"تُخزَّن الأجهزة تلقائيًا في «{PCR_STORAGE_SECTION}» عند ترك مكان التخزين فارغًا."
+    )
+
+    products = get_pcr_products()
+    pcr = products.copy()
+    if not pcr.empty:
+        for column in (
+            "serial_number",
+            "manufacturer",
+            "storage_location",
+            "device_status",
+        ):
+            if column not in pcr.columns:
+                pcr[column] = ""
+        pcr["_stock"] = pcr["current_stock"].apply(to_number)
+        status_column = (
+            pcr["device_status"].apply(_product_note)
+            if "device_status" in pcr.columns
+            else pd.Series([""] * len(pcr), index=pcr.index)
+        )
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("عدد أجهزة PCR", len(pcr), width="stretch")
+        with c2:
+            st.metric("إجمالي الكميات", f"{pcr['_stock'].sum():g}", width="stretch")
+        with c3:
+            st.metric(
+                "أجهزة تحت الصيانة",
+                int((status_column == "تحت الصيانة").sum()),
+                width="stretch",
+            )
+
+    tab_list, tab_add, tab_edit, tab_delete = st.tabs(
+        ["📋 أجهزة PCR", "➕ إضافة جهاز", "✏️ تعديل جهاز", "🗑️ حذف صنف"]
+    )
+    with tab_add:
+        _render_pcr_add_device(pcr)
+    with tab_edit:
+        _render_pcr_edit_device(pcr)
+    with tab_delete:
+        _render_product_delete_form(
+            pcr, "pcr", "لا توجد أجهزة PCR للحذف."
+        )
+    with tab_list:
+        if pcr.empty:
+            st.info("لا توجد أجهزة PCR بعد — أضف أول جهاز من تبويب «إضافة جهاز».")
+            return
+
+        search = st.text_input(
+            "🔍 ابحث بالاسم أو الرقم التسلسلي أو الشركة المصنعة أو مكان التخزين",
+            placeholder="",
+            key="pcr_search",
+            width="stretch",
+        )
+        status_filter = st.selectbox(
+            "🎛️ تصفية حسب حالة الجهاز",
+            options=["الكل"] + DEVICE_STATUSES,
+            key="pcr_status_filter",
+            width="stretch",
+        )
+        view = pcr
+        if search.strip():
+            term = search.strip()
+            mask = (
+                view["product_code"].astype(str).str.contains(term, case=False, na=False)
+                | view["product_name"].astype(str).str.contains(term, case=False, na=False)
+                | view["serial_number"].astype(str).str.contains(term, case=False, na=False)
+                | view["manufacturer"].astype(str).str.contains(term, case=False, na=False)
+                | view["storage_location"].astype(str).str.contains(term, case=False, na=False)
+            )
+            view = view[mask]
+        if status_filter != "الكل":
+            view = view[
+                view["device_status"].apply(_product_note) == status_filter
+            ]
+
+        st.write("")
+        st.markdown(f"#### 📦 أجهزة PCR ({len(view)})")
+        _render_pcr_devices_table(view, "لا توجد أجهزة PCR مطابقة للبحث.")
+
+        st.write("")
+        st.markdown("#### 🗂️ التخزين المنظم داخل قسم PCR")
+        grouped = view.copy()
+        if "storage_location" not in grouped.columns:
+            grouped["storage_location"] = ""
+        grouped["storage_location"] = grouped["storage_location"].apply(
+            lambda value: str(value or "").strip() or PCR_STORAGE_SECTION
+        )
+        for location, group in grouped.groupby("storage_location", sort=True):
+            st.markdown(f"##### 📍 {location} — {len(group)} جهاز")
+            _render_pcr_devices_table(group, "لا توجد أجهزة في هذا الموقع.")
+
+
+# --------------------------------------------------------------------------- #
+#                        5) صفحة قسم الكيماويات المستقل
+# --------------------------------------------------------------------------- #
+def _date_value(value):
+    text = _product_note(value)
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _chemicals_view(df) -> pd.DataFrame:
+    view = df.copy()
+    for column in ("manufacturer", "storage_location", "date_added", "expiry_date"):
+        if column not in view.columns:
+            view[column] = ""
+    view["_count"] = view["current_stock"].apply(to_number)
+    view["manufacturer"] = view["manufacturer"].apply(
+        lambda value: _product_note(value) or "—"
+    )
+    view["storage_location"] = view["storage_location"].apply(
+        lambda value: _product_note(value) or CHEMICALS_STORAGE_SECTION
+    )
+    view["date_added"] = view["date_added"].apply(
+        lambda value: _product_note(value) or "—"
+    )
+    view["expiry_date"] = view["expiry_date"].apply(
+        lambda value: _product_note(value) or "—"
+    )
+    return view[
+        [
+            "product_code",
+            "product_name",
+            "manufacturer",
+            "_count",
+            "storage_location",
+            "date_added",
+            "expiry_date",
+        ]
+    ].rename(
+        columns={
+            "product_code": "الكود",
+            "product_name": "اسم المادة الكيميائية",
+            "manufacturer": "اسم الشركة المصنعة",
+            "_count": "العدد",
+            "storage_location": "مكان التخزين",
+            "date_added": "تاريخ الإضافة",
+            "expiry_date": "تاريخ الانتهاء",
+        }
+    )
+
+
+def _render_chemicals_table(df, empty_message: str) -> None:
+    if df.empty:
+        st.info(empty_message)
+        return
+    st.dataframe(_chemicals_view(df), use_container_width=True, hide_index=True)
+
+
+def _render_chemical_withdraw_form(chemicals) -> None:
+    if chemicals.empty:
+        st.info("لا توجد مواد كيميائية لسحبها — أضف مادة أولًا.")
+        return
+
+    labels = {}
+    for _, row in chemicals.iterrows():
+        name = _product_note(row.get("product_name")) or "مادة كيميائية"
+        stock = to_number(row.get("current_stock"))
+        unit = _product_note(row.get("unit"))
+        suffix = f" {unit}" if unit else ""
+        labels[f'{name} [{row["product_code"]}] — الرصيد {stock:g}{suffix}'] = str(
+            row["product_code"]
+        )
+
+    choice = st.selectbox(
+        "اختر المادة الكيميائية المراد سحبها",
+        options=list(labels.keys()),
+        width="stretch",
+        key="chemical_withdraw_select",
+    )
+    code = labels[choice]
+    product = next(
+        (r for _, r in chemicals.iterrows() if str(r["product_code"]).strip() == code),
+        None,
+    )
+    if product is None:
+        st.warning("لم يتم العثور على المادة المحددة.")
+        return
+
+    stock = to_number(product.get("current_stock"))
+    manufacturer = _product_note(product.get("manufacturer")) or "—"
+    location = _product_note(product.get("storage_location")) or CHEMICALS_STORAGE_SECTION
+    expiry = _product_note(product.get("expiry_date")) or "—"
+    st.caption(
+        f"الرصيد الحالي: **{stock:g}** • الشركة المصنعة: **{manufacturer}** • "
+        f"مكان التخزين: **{location}** • تاريخ الانتهاء: **{expiry}**"
+    )
+    if stock <= 0:
+        st.warning("لا يوجد رصيد متاح من هذه المادة حاليًا.")
+        return
+
+    with st.form("chemical_withdraw_form", clear_on_submit=True):
+        st.markdown("#### بيانات سحب المادة الكيميائية")
+        q1, _q2 = st.columns(2)
+        with q1:
+            qty = st.number_input(
+                "الكمية المسحوبة *",
+                min_value=0.0,
+                step=1.0,
+                value=None,
+                placeholder="",
+                width="stretch",
+            )
+        c1, c2 = st.columns(2)
+        with c1:
+            person = st.text_input(
+                "اسم الساحب / المستلم *", placeholder="", width="stretch"
+            )
+        with c2:
+            supervisor = st.text_input(
+                "اسم المسؤول / أمين المخزن *", placeholder="", width="stretch"
+            )
+
+        stamp_now = datetime.now()
+        d1, h1, m1, a1 = st.columns(4)
+        with d1:
+            wdate = st.date_input("تاريخ السحب", value=stamp_now.date(), width="stretch")
+        with h1:
+            hour12 = st.selectbox(
+                "الساعة",
+                options=list(range(1, 13)),
+                index=(stamp_now.hour % 12 or 12) - 1,
+                width="stretch",
+            )
+        with m1:
+            minute = st.selectbox(
+                "الدقيقة",
+                options=list(range(0, 60)),
+                index=stamp_now.minute,
+                format_func=lambda m: f"{m:02d}",
+                width="stretch",
+            )
+        with a1:
+            ampm = st.selectbox(
+                "ص / م",
+                options=["ص", "م"],
+                index=0 if stamp_now.hour < 12 else 1,
+                width="stretch",
+            )
+        notes = st.text_area(
+            "ملاحظات السحب", placeholder="", height=80, width="stretch"
+        )
+        submitted = st.form_submit_button(
+            "📤 تسجيل سحب المادة", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    hour24 = (int(hour12) % 12) + (12 if ampm == "م" else 0)
+    stamp = (
+        f"{wdate.strftime('%Y-%m-%d')} {hour24:02d}:{int(minute):02d}:00"
+        if wdate
+        else ""
+    )
+    ok, msg = withdraw_chemical(
+        code, qty, person, stamp, supervisor, notes=notes
+    )
+    if ok:
+        st.success(msg)
+        st.rerun()
+    else:
+        st.error(msg)
+
+
+def _render_chemical_withdrawals(chemicals) -> None:
+    withdrawals = get_withdrawals()
+    if withdrawals.empty:
+        st.info("لا توجد عمليات سحب كيميائية مسجلة بعد.")
+        return
+
+    chemical_codes = {
+        _product_note(row.get("product_code")) for _, row in chemicals.iterrows()
+    }
+    chemical_codes.discard("")
+    if not chemical_codes:
+        st.info("لا توجد عمليات سحب كيميائية مسجلة بعد.")
+        return
+
+    history = withdrawals[
+        withdrawals["product_code"].apply(_product_note).isin(chemical_codes)
+    ].copy()
+    if history.empty:
+        st.info("لا توجد عمليات سحب كيميائية مسجلة بعد.")
+        return
+
+    search = st.text_input(
+        "🔍 ابحث بالكود أو الاسم أو اسم الساحب أو المسؤول",
+        placeholder="",
+        key="chemical_withdraw_search",
+        width="stretch",
+    )
+    if search.strip():
+        term = search.strip()
+        mask = (
+            history["product_code"].astype(str).str.contains(term, case=False, na=False)
+            | history["product_name"].astype(str).str.contains(term, case=False, na=False)
+            | history["withdrawn_by"].astype(str).str.contains(term, case=False, na=False)
+            | history["supervisor_name"].astype(str).str.contains(term, case=False, na=False)
+        )
+        history = history[mask]
+        if history.empty:
+            st.info("لا توجد عمليات سحب مطابقة للبحث.")
+            return
+
+    movements = get_movements()
+    fallback_map = {
+        _product_note(row.get("product_code")): to_number(row.get("current_stock"))
+        for _, row in chemicals.iterrows()
+    }
+
+    rows = []
+    for _, row in history.iloc[::-1].iterrows():
+        code = _product_note(row.get("product_code"))
+        remaining = _remaining_quantity(row, movements, fallback_map.get(code))
+        rows.append(
+            {
+                "التاريخ والوقت": _product_note(row.get("withdraw_date")),
+                "الكود": code,
+                "المادة الكيميائية": _product_note(row.get("product_name")),
+                "الكمية المسحوبة": to_number(row.get("qty")),
+                "الرصيد المتبقي": "" if remaining is None else f"{remaining:g}",
+                "اسم الساحب / المستلم": _product_note(row.get("withdrawn_by")),
+                "اسم المسؤول / أمين المخزن": _product_note(row.get("supervisor_name")),
+                "ملاحظات": _product_note(row.get("notes")),
+                "وقت التسجيل": _product_note(row.get("created_at")),
+            }
+        )
+
+    total_qty = sum(to_number(row.get("qty")) for _, row in history.iterrows())
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("عدد عمليات السحب", len(history), width="stretch")
+    with c2:
+        st.metric("إجمالي الكمية المسحوبة", f"{total_qty:g}", width="stretch")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def _render_chemical_add_form() -> None:
+    with st.form("chemical_add_form", clear_on_submit=True):
+        st.markdown("#### ➕ إضافة مادة كيميائية")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            code = st.text_input("الكود *", placeholder="", width="stretch")
+        with c2:
+            name = st.text_input(
+                "اسم المادة الكيميائية (اختياري)", placeholder="", width="stretch"
+            )
+        with c3:
+            manufacturer = st.text_input(
+                "اسم الشركة المصنعة", placeholder="", width="stretch"
+            )
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            count = st.number_input(
+                "العدد", min_value=0.0, step=1.0, value=None, placeholder="", width="stretch"
+            )
+        with c5:
+            storage_location = st.text_input(
+                "مكان التخزين", value=CHEMICALS_STORAGE_SECTION, width="stretch"
+            )
+        with c6:
+            date_added = st.date_input("تاريخ الإضافة", value=date.today(), width="stretch")
+        expiry_date = st.date_input("تاريخ الانتهاء", value=None, width="stretch")
+        notes = st.text_area("ملاحظات", placeholder="", height=80, width="stretch")
+        submitted = st.form_submit_button(
+            "➕ إضافة المادة الكيميائية", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    code = str(code or "").strip()
+    if not code:
+        st.error("الكود مطلوب.")
+        return
+    name = str(name or "").strip() or code
+
+    ok, msg = add_stock_item(
+        name,
+        count,
+        "",
+        code=code,
+        date_added=date_added.strftime("%Y-%m-%d") if date_added else "",
+        notes=notes,
+        manufacturer=manufacturer,
+        expiry_date=expiry_date.strftime("%Y-%m-%d") if expiry_date else "",
+        category=PRODUCT_CATEGORY_CHEMICALS,
+        storage_location=storage_location,
+    )
+    if ok:
+        st.success(msg)
+        st.rerun()
+    else:
+        st.error(msg)
+
+
+def _render_chemical_edit_form(chemicals) -> None:
+    if chemicals.empty:
+        st.info("لا توجد مواد كيميائية لتعديلها.")
+        return
+
+    labels = {
+        f'{_product_note(row.get("product_name")) or "مادة كيميائية"} '
+        f'[{row["product_code"]}]': str(row["product_code"])
+        for _, row in chemicals.iterrows()
+    }
+    choice = st.selectbox(
+        "اختر المادة الكيميائية المراد تعديلها",
+        options=list(labels.keys()),
+        index=None,
+        placeholder="",
+        width="stretch",
+        key="chemical_edit_select",
+    )
+    if choice is None:
+        st.caption("اختر مادة لعرض بياناتها وتعديلها.")
+        return
+
+    code = labels[choice]
+    product = next(
+        (r for _, r in chemicals.iterrows() if str(r["product_code"]).strip() == code),
+        None,
+    )
+    if product is None:
+        st.warning("لم يتم العثور على المادة المحددة.")
+        return
+
+    cur_name = _product_note(product.get("product_name"))
+    cur_manufacturer = _product_note(product.get("manufacturer"))
+    cur_count = to_number(product.get("current_stock"))
+    cur_location = _product_note(product.get("storage_location")) or CHEMICALS_STORAGE_SECTION
+    cur_date_added = _date_value(product.get("date_added"))
+    cur_expiry = _date_value(product.get("expiry_date"))
+    cur_notes = _product_note(product.get("notes"))
+    cur_unit = _product_note(product.get("unit"))
+
+    with st.form(f"chemical_edit_form_{code}"):
+        st.markdown(f"#### ✏️ تعديل المادة الكيميائية `{code}`")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            name_v = st.text_input(
+                "اسم المادة الكيميائية", value=cur_name, width="stretch"
+            )
+        with c2:
+            manufacturer_v = st.text_input(
+                "اسم الشركة المصنعة", value=cur_manufacturer, width="stretch"
+            )
+        with c3:
+            count_v = st.number_input(
+                "العدد", min_value=0.0, step=1.0, value=cur_count, width="stretch"
+            )
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            location_v = st.text_input(
+                "مكان التخزين", value=cur_location, width="stretch"
+            )
+        with c5:
+            date_added_v = st.date_input(
+                "تاريخ الإضافة", value=cur_date_added, width="stretch"
+            )
+        with c6:
+            expiry_v = st.date_input(
+                "تاريخ الانتهاء", value=cur_expiry, width="stretch"
+            )
+        notes_v = st.text_area("ملاحظات", value=cur_notes, height=80, width="stretch")
+        submitted = st.form_submit_button(
+            "💾 حفظ تعديلات المادة", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    new_count = to_number(count_v, -1)
+    if new_count < 0:
+        st.error("العدد يجب أن يكون صفرًا أو أكثر.")
+        return
+
+    name_v = str(name_v or "").strip() or code
+    ok, msg = update_product(
+        code,
+        {
+            "product_name": name_v,
+            "unit": cur_unit,
+            "manufacturer": str(manufacturer_v or "").strip(),
+            "current_stock": new_count,
+            "storage_location": str(location_v or "").strip(),
+            "date_added": date_added_v.strftime("%Y-%m-%d") if date_added_v else "",
+            "expiry_date": expiry_v.strftime("%Y-%m-%d") if expiry_v else "",
+            "notes": str(notes_v or "").strip(),
+            "category": PRODUCT_CATEGORY_CHEMICALS,
+        },
+    )
+    if not ok:
+        st.error(msg)
+        return
+
+    delta = new_count - cur_count
+    if abs(delta) > 1e-9:
+        record_movement(
+            order_no="",
+            product_code=code,
+            product_name=name_v,
+            qty=delta,
+            balance_after=new_count,
+            person=current_username() or "تعديل مادة كيميائية",
+            movement_type="تعديل رصيد",
+            notes=f"تعديل عدد مادة كيميائية من {cur_count:g} إلى {new_count:g}",
+        )
+    st.success(msg)
+    st.rerun()
+
+
+def page_chemicals() -> None:
+    header("🧪 قسم الكيماويات", "قسم مستقل لتتبع المواد الكيميائية وبياناتها")
+    st.caption(
+        f"يعرض هذا القسم المواد الكيميائية فقط. "
+        f"تُخزَّن تلقائيًا في «{CHEMICALS_STORAGE_SECTION}» عند ترك مكان التخزين فارغًا."
+    )
+
+    products = get_chemical_products()
+    chemicals = products.copy()
+    if not chemicals.empty:
+        for column in ("manufacturer", "storage_location", "date_added", "expiry_date"):
+            if column not in chemicals.columns:
+                chemicals[column] = ""
+        chemicals["_count"] = chemicals["current_stock"].apply(to_number)
+        today = date.today()
+        expired = 0
+        for value in chemicals["expiry_date"]:
+            expiry = _date_value(value)
+            if expiry and expiry < today:
+                expired += 1
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("عدد المواد الكيميائية", len(chemicals), width="stretch")
+        with c2:
+            st.metric("إجمالي العدد", f"{chemicals['_count'].sum():g}", width="stretch")
+        with c3:
+            st.metric("مواد منتهية الصلاحية", expired, width="stretch")
+
+    tab_list, tab_withdraw, tab_history, tab_add, tab_edit, tab_delete = st.tabs(
+        [
+            "📋 المواد الكيميائية",
+            "📤 سحب مادة",
+            "📜 سجل السحب",
+            "➕ إضافة مادة",
+            "✏️ تعديل مادة",
+            "🗑️ حذف صنف",
+        ]
+    )
+    with tab_add:
+        _render_chemical_add_form()
+    with tab_edit:
+        _render_chemical_edit_form(chemicals)
+    with tab_withdraw:
+        _render_chemical_withdraw_form(chemicals)
+    with tab_history:
+        _render_chemical_withdrawals(chemicals)
+    with tab_delete:
+        _render_product_delete_form(
+            chemicals, "chemicals", "لا توجد مواد كيميائية للحذف."
+        )
+    with tab_list:
+        if chemicals.empty:
+            st.info("لا توجد مواد كيميائية بعد — أضف أول مادة من تبويب «إضافة مادة».")
+            return
+
+        search = st.text_input(
+            "🔍 ابحث بالكود أو الاسم أو الشركة المصنعة أو مكان التخزين",
+            placeholder="",
+            key="chemical_search",
+            width="stretch",
+        )
+        view = chemicals
+        if search.strip():
+            term = search.strip()
+            mask = (
+                view["product_code"].astype(str).str.contains(term, case=False, na=False)
+                | view["product_name"].astype(str).str.contains(term, case=False, na=False)
+                | view["manufacturer"].astype(str).str.contains(term, case=False, na=False)
+                | view["storage_location"].astype(str).str.contains(term, case=False, na=False)
+            )
+            view = view[mask]
+
+        st.write("")
+        st.markdown(f"#### 🧪 المواد الكيميائية ({len(view)})")
+        _render_chemicals_table(view, "لا توجد مواد كيميائية مطابقة للبحث.")
+
+
+# --------------------------------------------------------------------------- #
+#                        6) صفحة قسم المكتبية المستقل
+# --------------------------------------------------------------------------- #
+def _office_split(stock, units_per_carton):
+    stock = to_number(stock)
+    per = to_number(units_per_carton)
+    if per > 0:
+        cartons = int(stock // per)
+        return cartons, stock - cartons * per
+    return 0, stock
+
+
+def _office_view(df) -> pd.DataFrame:
+    view = df.copy()
+    for column in (
+        "units_per_carton",
+        "purchase_date",
+        "last_withdraw_date",
+        "storage_location",
+    ):
+        if column not in view.columns:
+            view[column] = ""
+    view["_count"] = view["current_stock"].apply(to_number)
+    view["_per_carton"] = view["units_per_carton"].apply(to_number)
+    split = [
+        _office_split(stock, per)
+        for stock, per in zip(view["_count"], view["_per_carton"])
+    ]
+    view["_cartons"] = [part[0] for part in split]
+    view["_loose"] = [part[1] for part in split]
+    view["units_per_carton"] = view["_per_carton"].apply(
+        lambda value: f"{value:g}" if value > 0 else "—"
+    )
+    view["purchase_date"] = view["purchase_date"].apply(
+        lambda value: _product_note(value) or "—"
+    )
+    view["last_withdraw_date"] = view["last_withdraw_date"].apply(
+        lambda value: _product_note(value) or "—"
+    )
+    view["storage_location"] = view["storage_location"].apply(
+        lambda value: _product_note(value) or OFFICE_STORAGE_SECTION
+    )
+    return view[
+        [
+            "product_code",
+            "product_name",
+            "_count",
+            "_cartons",
+            "_loose",
+            "units_per_carton",
+            "purchase_date",
+            "last_withdraw_date",
+            "storage_location",
+        ]
+    ].rename(
+        columns={
+            "product_code": "الكود",
+            "product_name": "اسم الصنف",
+            "_count": "العدد الإجمالي",
+            "_cartons": "عدد الكراتين",
+            "_loose": "وحدات مفردة",
+            "units_per_carton": "الوحدات داخل الكرتونة",
+            "purchase_date": "تاريخ الشراء",
+            "last_withdraw_date": "تاريخ السحب",
+            "storage_location": "مكان التخزين",
+        }
+    )
+
+
+def _render_office_table(df, empty_message: str) -> None:
+    if df.empty:
+        st.info(empty_message)
+        return
+    st.dataframe(_office_view(df), use_container_width=True, hide_index=True)
+
+
+def _render_office_add_form() -> None:
+    with st.form("office_add_form", clear_on_submit=True):
+        st.markdown("#### ➕ إضافة صنف مكتبي")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            code = st.text_input("الكود *", placeholder="", width="stretch")
+        with c2:
+            name = st.text_input("اسم الصنف *", placeholder="", width="stretch")
+        with c3:
+            units_per_carton = st.number_input(
+                "الوحدات داخل الكرتونة",
+                min_value=0.0,
+                step=1.0,
+                value=None,
+                placeholder="",
+                width="stretch",
+            )
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            cartons = st.number_input(
+                "عدد الكراتين",
+                min_value=0.0,
+                step=1.0,
+                value=None,
+                placeholder="",
+                width="stretch",
+            )
+        with c5:
+            loose_units = st.number_input(
+                "وحدات مفردة (اختياري)",
+                min_value=0.0,
+                step=1.0,
+                value=None,
+                placeholder="",
+                width="stretch",
+            )
+        with c6:
+            purchase_date = st.date_input("تاريخ الشراء", value=None, width="stretch")
+        location = st.text_input(
+            "مكان التخزين", value=OFFICE_STORAGE_SECTION, width="stretch"
+        )
+        notes = st.text_area("ملاحظات", placeholder="", height=80, width="stretch")
+        submitted = st.form_submit_button(
+            "➕ إضافة الصنف المكتبي", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    code = str(code or "").strip()
+    name = str(name or "").strip()
+    if not code:
+        st.error("الكود مطلوب.")
+        return
+    if not name:
+        st.error("اسم الصنف مطلوب.")
+        return
+
+    per_carton = to_number(units_per_carton, 0)
+    cartons_count = to_number(cartons, 0)
+    loose = to_number(loose_units, 0)
+    if per_carton < 0 or cartons_count < 0 or loose < 0:
+        st.error("الكميات يجب أن تكون صفرًا أو أكثر.")
+        return
+    if cartons_count > 0 and per_carton <= 0:
+        st.error("أدخل عدد الوحدات داخل الكرتونة عند إضافة كراتين.")
+        return
+    qty = cartons_count * per_carton + loose
+
+    ok, msg = add_stock_item(
+        name,
+        qty,
+        "",
+        code=code,
+        date_added=date.today().strftime("%Y-%m-%d"),
+        notes=notes,
+        category=PRODUCT_CATEGORY_OFFICE,
+        storage_location=location,
+        units_per_carton=per_carton,
+        purchase_date=purchase_date.strftime("%Y-%m-%d") if purchase_date else "",
+    )
+    if ok:
+        st.success(msg)
+        st.rerun()
+    else:
+        st.error(msg)
+
+
+def _render_office_edit_form(office) -> None:
+    if office.empty:
+        st.info("لا توجد أصناف مكتبية لتعديلها.")
+        return
+
+    labels = {
+        f'{_product_note(row.get("product_name")) or "صنف مكتبي"} '
+        f'[{row["product_code"]}]': str(row["product_code"])
+        for _, row in office.iterrows()
+    }
+    choice = st.selectbox(
+        "اختر الصنف المكتبي المراد تعديله",
+        options=list(labels.keys()),
+        index=None,
+        placeholder="",
+        width="stretch",
+        key="office_edit_select",
+    )
+    if choice is None:
+        st.caption("اختر صنفًا لعرض بياناته وتعديلها.")
+        return
+
+    code = labels[choice]
+    product = next(
+        (r for _, r in office.iterrows() if str(r["product_code"]).strip() == code),
+        None,
+    )
+    if product is None:
+        st.warning("لم يتم العثور على الصنف المحدد.")
+        return
+
+    cur_name = _product_note(product.get("product_name"))
+    cur_count = to_number(product.get("current_stock"))
+    cur_per_carton = to_number(product.get("units_per_carton"))
+    cur_purchase = _date_value(product.get("purchase_date"))
+    cur_withdraw = _date_value(product.get("last_withdraw_date"))
+    cur_location = _product_note(product.get("storage_location")) or OFFICE_STORAGE_SECTION
+    cur_notes = _product_note(product.get("notes"))
+    cur_unit = _product_note(product.get("unit"))
+
+    with st.form(f"office_edit_form_{code}"):
+        st.markdown(f"#### ✏️ تعديل الصنف المكتبي `{code}`")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            name_v = st.text_input("اسم الصنف", value=cur_name, width="stretch")
+        with c2:
+            count_v = st.number_input(
+                "العدد الإجمالي", min_value=0.0, step=1.0, value=cur_count, width="stretch"
+            )
+        with c3:
+            per_carton_v = st.number_input(
+                "الوحدات داخل الكرتونة",
+                min_value=0.0,
+                step=1.0,
+                value=cur_per_carton,
+                width="stretch",
+            )
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            purchase_v = st.date_input(
+                "تاريخ الشراء", value=cur_purchase, width="stretch"
+            )
+        with c5:
+            withdraw_v = st.date_input(
+                "تاريخ السحب", value=cur_withdraw, width="stretch"
+            )
+        with c6:
+            location_v = st.text_input(
+                "مكان التخزين", value=cur_location, width="stretch"
+            )
+        notes_v = st.text_area("ملاحظات", value=cur_notes, height=80, width="stretch")
+        submitted = st.form_submit_button(
+            "💾 حفظ تعديلات الصنف", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    new_count = to_number(count_v, -1)
+    new_per_carton = to_number(per_carton_v, -1)
+    if new_count < 0 or new_per_carton < 0:
+        st.error("العدد والوحدات داخل الكرتونة يجب أن تكون صفرًا أو أكثر.")
+        return
+
+    name_v = str(name_v or "").strip() or code
+    ok, msg = update_product(
+        code,
+        {
+            "product_name": name_v,
+            "unit": cur_unit,
+            "current_stock": new_count,
+            "units_per_carton": new_per_carton,
+            "purchase_date": purchase_v.strftime("%Y-%m-%d") if purchase_v else "",
+            "last_withdraw_date": withdraw_v.strftime("%Y-%m-%d") if withdraw_v else "",
+            "storage_location": str(location_v or "").strip(),
+            "notes": str(notes_v or "").strip(),
+            "category": PRODUCT_CATEGORY_OFFICE,
+        },
+    )
+    if not ok:
+        st.error(msg)
+        return
+
+    delta = new_count - cur_count
+    if abs(delta) > 1e-9:
+        record_movement(
+            order_no="",
+            product_code=code,
+            product_name=name_v,
+            qty=delta,
+            balance_after=new_count,
+            person=current_username() or "تعديل صنف مكتبي",
+            movement_type="تعديل رصيد",
+            notes=f"تعديل عدد صنف مكتبي من {cur_count:g} إلى {new_count:g}",
+        )
+    st.success(msg)
+    st.rerun()
+
+
+def _render_office_withdraw_form(office) -> None:
+    if office.empty:
+        st.info("لا توجد أصناف مكتبية لسحبها — أضف صنفًا أولًا.")
+        return
+
+    labels = {}
+    for _, row in office.iterrows():
+        name = _product_note(row.get("product_name")) or "صنف مكتبي"
+        stock = to_number(row.get("current_stock"))
+        per_carton = to_number(row.get("units_per_carton"))
+        cartons, loose = _office_split(stock, per_carton)
+        cartons_text = f" — {cartons} كرتونة + {loose:g} وحدة" if per_carton > 0 else ""
+        labels[f'{name} [{row["product_code"]}] — العدد {stock:g}{cartons_text}'] = str(
+            row["product_code"]
+        )
+
+    choice = st.selectbox(
+        "اختر الصنف المكتبي المراد سحبه",
+        options=list(labels.keys()),
+        width="stretch",
+        key="office_withdraw_select",
+    )
+    code = labels[choice]
+    product = next(
+        (r for _, r in office.iterrows() if str(r["product_code"]).strip() == code),
+        None,
+    )
+    if product is None:
+        st.warning("لم يتم العثور على الصنف المحدد.")
+        return
+
+    stock = to_number(product.get("current_stock"))
+    per_carton = to_number(product.get("units_per_carton"))
+    cartons, loose = _office_split(stock, per_carton)
+    location = _product_note(product.get("storage_location")) or OFFICE_STORAGE_SECTION
+    purchase = _product_note(product.get("purchase_date")) or "—"
+    st.caption(
+        f"العدد الحالي: **{stock:g}** • الكراتين: **{cartons}** • وحدات مفردة: **{loose:g}** • "
+        f"داخل الكرتونة: **{per_carton:g}** • مكان التخزين: **{location}** • "
+        f"تاريخ الشراء: **{purchase}**"
+    )
+    if stock <= 0:
+        st.warning("لا يوجد رصيد متاح من هذا الصنف حاليًا.")
+        return
+
+    with st.form("office_withdraw_form", clear_on_submit=True):
+        st.markdown("#### بيانات سحب الصنف المكتبي")
+        qty = st.number_input(
+            "الكمية المسحوبة (بالعدد) *",
+            min_value=0.0,
+            step=1.0,
+            value=None,
+            placeholder="",
+            width="stretch",
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            person = st.text_input(
+                "اسم الساحب / المستلم *", placeholder="", width="stretch"
+            )
+        with c2:
+            supervisor = st.text_input(
+                "اسم المسؤول / أمين المخزن *", placeholder="", width="stretch"
+            )
+
+        stamp_now = datetime.now()
+        d1, h1, m1, a1 = st.columns(4)
+        with d1:
+            wdate = st.date_input("تاريخ السحب", value=stamp_now.date(), width="stretch")
+        with h1:
+            hour12 = st.selectbox(
+                "الساعة",
+                options=list(range(1, 13)),
+                index=(stamp_now.hour % 12 or 12) - 1,
+                width="stretch",
+            )
+        with m1:
+            minute = st.selectbox(
+                "الدقيقة",
+                options=list(range(0, 60)),
+                index=stamp_now.minute,
+                format_func=lambda m: f"{m:02d}",
+                width="stretch",
+            )
+        with a1:
+            ampm = st.selectbox(
+                "ص / م",
+                options=["ص", "م"],
+                index=0 if stamp_now.hour < 12 else 1,
+                width="stretch",
+            )
+        notes = st.text_area(
+            "ملاحظات السحب", placeholder="", height=80, width="stretch"
+        )
+        submitted = st.form_submit_button(
+            "📤 تسجيل سحب الصنف", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    hour24 = (int(hour12) % 12) + (12 if ampm == "م" else 0)
+    stamp = (
+        f"{wdate.strftime('%Y-%m-%d')} {hour24:02d}:{int(minute):02d}:00"
+        if wdate
+        else ""
+    )
+    ok, msg = withdraw_office_item(
+        code, qty, person, stamp, supervisor, notes=notes
+    )
+    if ok:
+        st.success(msg)
+        st.rerun()
+    else:
+        st.error(msg)
+
+
+def _render_office_withdrawals(office) -> None:
+    withdrawals = get_withdrawals()
+    if withdrawals.empty:
+        st.info("لا توجد عمليات سحب مكتبية مسجلة بعد.")
+        return
+
+    office_codes = {
+        _product_note(row.get("product_code")) for _, row in office.iterrows()
+    }
+    office_codes.discard("")
+    if not office_codes:
+        st.info("لا توجد عمليات سحب مكتبية مسجلة بعد.")
+        return
+
+    history = withdrawals[
+        withdrawals["product_code"].apply(_product_note).isin(office_codes)
+    ].copy()
+    if history.empty:
+        st.info("لا توجد عمليات سحب مكتبية مسجلة بعد.")
+        return
+
+    search = st.text_input(
+        "🔍 ابحث بالكود أو الاسم أو اسم الساحب أو المسؤول",
+        placeholder="",
+        key="office_withdraw_search",
+        width="stretch",
+    )
+    if search.strip():
+        term = search.strip()
+        mask = (
+            history["product_code"].astype(str).str.contains(term, case=False, na=False)
+            | history["product_name"].astype(str).str.contains(term, case=False, na=False)
+            | history["withdrawn_by"].astype(str).str.contains(term, case=False, na=False)
+            | history["supervisor_name"].astype(str).str.contains(term, case=False, na=False)
+        )
+        history = history[mask]
+        if history.empty:
+            st.info("لا توجد عمليات سحب مطابقة للبحث.")
+            return
+
+    movements = get_movements()
+    per_carton_map = {
+        _product_note(row.get("product_code")): to_number(row.get("units_per_carton"))
+        for _, row in office.iterrows()
+    }
+    fallback_map = {
+        _product_note(row.get("product_code")): to_number(row.get("current_stock"))
+        for _, row in office.iterrows()
+    }
+
+    rows = []
+    for _, row in history.iloc[::-1].iterrows():
+        code = _product_note(row.get("product_code"))
+        qty = to_number(row.get("qty"))
+        per_carton = per_carton_map.get(code, 0)
+        cartons, loose = _office_split(qty, per_carton)
+        remaining = _remaining_quantity(row, movements, fallback_map.get(code))
+        rows.append(
+            {
+                "التاريخ والوقت": _product_note(row.get("withdraw_date")),
+                "الكود": code,
+                "اسم الصنف": _product_note(row.get("product_name")),
+                "الكمية المسحوبة": qty,
+                "الكراتين": cartons if per_carton > 0 else "—",
+                "وحدات مفردة": loose if per_carton > 0 else "—",
+                "الرصيد المتبقي": "" if remaining is None else f"{remaining:g}",
+                "اسم الساحب / المستلم": _product_note(row.get("withdrawn_by")),
+                "اسم المسؤول / أمين المخزن": _product_note(row.get("supervisor_name")),
+                "ملاحظات": _product_note(row.get("notes")),
+                "وقت التسجيل": _product_note(row.get("created_at")),
+            }
+        )
+
+    total_qty = sum(to_number(row.get("qty")) for _, row in history.iterrows())
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("عدد عمليات السحب", len(history), width="stretch")
+    with c2:
+        st.metric("إجمالي الكمية المسحوبة", f"{total_qty:g}", width="stretch")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def page_office() -> None:
+    header("🗂️ قسم المكتبية", "قسم مستقل لتتبع الأصناف المكتبية وكمياتها وتواريخها")
+    st.caption(
+        f"يعرض هذا القسم الأصناف المكتبية فقط. "
+        f"تُخزَّن تلقائيًا في «{OFFICE_STORAGE_SECTION}» عند ترك مكان التخزين فارغًا."
+    )
+
+    office = get_office_products().copy()
+    if not office.empty:
+        for column in (
+            "units_per_carton",
+            "purchase_date",
+            "last_withdraw_date",
+            "storage_location",
+        ):
+            if column not in office.columns:
+                office[column] = ""
+        office["_count"] = office["current_stock"].apply(to_number)
+        office["_per_carton"] = office["units_per_carton"].apply(to_number)
+        cartons_total = sum(
+            _office_split(stock, per)[0]
+            for stock, per in zip(office["_count"], office["_per_carton"])
+        )
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("عدد الأصناف المكتبية", len(office), width="stretch")
+        with c2:
+            st.metric("إجمالي العدد", f"{office['_count'].sum():g}", width="stretch")
+        with c3:
+            st.metric("إجمالي الكراتين", cartons_total, width="stretch")
+
+    tab_list, tab_withdraw, tab_history, tab_add, tab_edit, tab_delete = st.tabs(
+        [
+            "📋 الأصناف المكتبية",
+            "📤 سحب صنف",
+            "📜 سجل السحب",
+            "➕ إضافة صنف",
+            "✏️ تعديل صنف",
+            "🗑️ حذف صنف",
+        ]
+    )
+    with tab_add:
+        _render_office_add_form()
+    with tab_edit:
+        _render_office_edit_form(office)
+    with tab_withdraw:
+        _render_office_withdraw_form(office)
+    with tab_history:
+        _render_office_withdrawals(office)
+    with tab_delete:
+        _render_product_delete_form(
+            office, "office", "لا توجد أصناف مكتبية للحذف."
+        )
+    with tab_list:
+        if office.empty:
+            st.info("لا توجد أصناف مكتبية بعد — أضف أول صنف من تبويب «إضافة صنف».")
+            return
+
+        search = st.text_input(
+            "🔍 ابحث بالكود أو الاسم أو مكان التخزين",
+            placeholder="",
+            key="office_search",
+            width="stretch",
+        )
+        view = office
+        if search.strip():
+            term = search.strip()
+            mask = (
+                view["product_code"].astype(str).str.contains(term, case=False, na=False)
+                | view["product_name"].astype(str).str.contains(term, case=False, na=False)
+                | view["storage_location"].astype(str).str.contains(term, case=False, na=False)
+            )
+            view = view[mask]
+
+        st.write("")
+        st.markdown(f"#### 🗂️ الأصناف المكتبية ({len(view)})")
+        _render_office_table(view, "لا توجد أصناف مكتبية مطابقة للبحث.")
+
+
+# --------------------------------------------------------------------------- #
+#                    7) صفحة قسم مستلزمات الكمبيوتر المستقل
+# --------------------------------------------------------------------------- #
+def _computer_view(df) -> pd.DataFrame:
+    view = df.copy()
+    for column in (
+        "storage_location",
+        "purchase_date",
+        "serial_number",
+        "device_condition",
+        "device_status",
+    ):
+        if column not in view.columns:
+            view[column] = ""
+    view["current_stock"] = view["current_stock"].apply(to_number)
+    view["storage_location"] = view["storage_location"].apply(
+        lambda value: _product_note(value) or COMPUTER_STORAGE_SECTION
+    )
+    view["purchase_date"] = view["purchase_date"].apply(
+        lambda value: _product_note(value) or "—"
+    )
+    view["device_condition"] = view["device_condition"].apply(
+        lambda value: _product_note(value) or "—"
+    )
+    view["serial_number"] = view["serial_number"].apply(
+        lambda value: _product_note(value) or "—"
+    )
+    view["device_status"] = view["device_status"].apply(
+        lambda value: _product_note(value) or "—"
+    )
+    return view[
+        [
+            "product_code",
+            "product_name",
+            "current_stock",
+            "storage_location",
+            "purchase_date",
+            "device_condition",
+            "device_status",
+            "serial_number",
+        ]
+    ].rename(
+        columns={
+            "product_code": "الكود",
+            "product_name": "اسم الصنف",
+            "current_stock": "الكمية",
+            "storage_location": "مكان التخزين",
+            "purchase_date": "تاريخ الشراء",
+            "device_condition": "تصنيف الجهاز",
+            "device_status": "حالة الجهاز",
+            "serial_number": "المواصفات / الأرقام التسلسلية",
+        }
+    )
+
+
+def _render_computer_table(df, empty_message: str) -> None:
+    if df.empty:
+        st.info(empty_message)
+        return
+    st.dataframe(_computer_view(df), use_container_width=True, hide_index=True)
+
+
+def _render_computer_add_form() -> None:
+    with st.form("computer_add_form", clear_on_submit=True):
+        st.markdown("#### ➕ إضافة صنف كمبيوتر")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            code = st.text_input("الكود *", placeholder="", width="stretch")
+        with c2:
+            name = st.text_input("اسم الصنف *", placeholder="", width="stretch")
+        with c3:
+            qty = st.number_input(
+                "الكمية",
+                min_value=0.0,
+                step=1.0,
+                value=None,
+                placeholder="",
+                width="stretch",
+            )
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            location = st.text_input(
+                "مكان التخزين", value=COMPUTER_STORAGE_SECTION, width="stretch"
+            )
+        with c5:
+            purchase_date = st.date_input("تاريخ الشراء", value=None, width="stretch")
+        with c6:
+            condition = st.selectbox(
+                "تصنيف الجهاز",
+                options=DEVICE_CONDITIONS,
+                index=0,
+                width="stretch",
+            )
+        specs = st.text_area(
+            "مواصفات الأجهزة أو الأرقام التسلسلية",
+            placeholder="",
+            height=90,
+            width="stretch",
+        )
+        notes = st.text_area("ملاحظات", placeholder="", height=80, width="stretch")
+        submitted = st.form_submit_button(
+            "➕ إضافة الصنف", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    code = str(code or "").strip()
+    name = str(name or "").strip()
+    if not code:
+        st.error("الكود مطلوب.")
+        return
+    if not name:
+        st.error("اسم الصنف مطلوب.")
+        return
+    if to_number(qty, -1) < 0:
+        st.error("الكمية يجب أن تكون صفرًا أو أكثر.")
+        return
+
+    ok, msg = add_stock_item(
+        name,
+        qty,
+        "",
+        code=code,
+        date_added=date.today().strftime("%Y-%m-%d"),
+        notes=notes,
+        category=PRODUCT_CATEGORY_COMPUTER,
+        storage_location=location,
+        purchase_date=purchase_date.strftime("%Y-%m-%d") if purchase_date else "",
+        serial_number=specs,
+        device_condition=condition,
+    )
+    if ok:
+        st.success(msg)
+        st.rerun()
+    else:
+        st.error(msg)
+
+
+def _render_computer_edit_form(computer) -> None:
+    if computer.empty:
+        st.info("لا توجد مستلزمات كمبيوتر لتعديلها.")
+        return
+
+    labels = {
+        f'{_product_note(row.get("product_name")) or "صنف كمبيوتر"} '
+        f'[{row["product_code"]}]': str(row["product_code"])
+        for _, row in computer.iterrows()
+    }
+    choice = st.selectbox(
+        "اختر الصنف المراد تعديله",
+        options=list(labels.keys()),
+        index=None,
+        placeholder="",
+        width="stretch",
+        key="computer_edit_select",
+    )
+    if choice is None:
+        st.caption("اختر صنفًا لعرض بياناته وتعديلها.")
+        return
+
+    code = labels[choice]
+    product = next(
+        (r for _, r in computer.iterrows() if str(r["product_code"]).strip() == code),
+        None,
+    )
+    if product is None:
+        st.warning("لم يتم العثور على الصنف المحدد.")
+        return
+
+    cur_name = _product_note(product.get("product_name"))
+    cur_qty = to_number(product.get("current_stock"))
+    cur_location = _product_note(product.get("storage_location")) or COMPUTER_STORAGE_SECTION
+    cur_purchase = _date_value(product.get("purchase_date"))
+    cur_specs = _product_note(product.get("serial_number"))
+    cur_notes = _product_note(product.get("notes"))
+    cur_condition = _product_note(product.get("device_condition"))
+    cur_unit = _product_note(product.get("unit"))
+    condition_index = (
+        DEVICE_CONDITIONS.index(cur_condition)
+        if cur_condition in DEVICE_CONDITIONS
+        else 0
+    )
+
+    with st.form(f"computer_edit_form_{code}"):
+        st.markdown(f"#### ✏️ تعديل الصنف `{code}`")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            name_v = st.text_input("اسم الصنف", value=cur_name, width="stretch")
+        with c2:
+            qty_v = st.number_input(
+                "الكمية", min_value=0.0, step=1.0, value=cur_qty, width="stretch"
+            )
+        with c3:
+            location_v = st.text_input(
+                "مكان التخزين", value=cur_location, width="stretch"
+            )
+        c4, c5 = st.columns(2)
+        with c4:
+            purchase_v = st.date_input(
+                "تاريخ الشراء", value=cur_purchase, width="stretch"
+            )
+        with c5:
+            condition_v = st.selectbox(
+                "تصنيف الجهاز",
+                options=DEVICE_CONDITIONS,
+                index=condition_index,
+                width="stretch",
+            )
+        specs_v = st.text_area(
+            "مواصفات الأجهزة أو الأرقام التسلسلية",
+            value=cur_specs,
+            height=90,
+            width="stretch",
+        )
+        notes_v = st.text_area("ملاحظات", value=cur_notes, height=80, width="stretch")
+        submitted = st.form_submit_button(
+            "💾 حفظ تعديلات الصنف", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    new_qty = to_number(qty_v, -1)
+    if new_qty < 0:
+        st.error("الكمية يجب أن تكون صفرًا أو أكثر.")
+        return
+
+    name_v = str(name_v or "").strip() or code
+    ok, msg = update_product(
+        code,
+        {
+            "product_name": name_v,
+            "unit": cur_unit,
+            "current_stock": new_qty,
+            "storage_location": str(location_v or "").strip(),
+            "purchase_date": purchase_v.strftime("%Y-%m-%d") if purchase_v else "",
+            "serial_number": str(specs_v or "").strip(),
+            "device_condition": condition_v,
+            "notes": str(notes_v or "").strip(),
+            "category": PRODUCT_CATEGORY_COMPUTER,
+        },
+    )
+    if not ok:
+        st.error(msg)
+        return
+
+    delta = new_qty - cur_qty
+    if abs(delta) > 1e-9:
+        record_movement(
+            order_no="",
+            product_code=code,
+            product_name=name_v,
+            qty=delta,
+            balance_after=new_qty,
+            person=current_username() or "تعديل صنف كمبيوتر",
+            movement_type="تعديل رصيد",
+            notes=f"تعديل كمية صنف كمبيوتر من {cur_qty:g} إلى {new_qty:g}",
+        )
+    st.success(msg)
+    st.rerun()
+
+
+def _render_computer_withdraw_form(computer) -> None:
+    if computer.empty:
+        st.info("لا توجد مستلزمات كمبيوتر لسحبها — أضف صنفًا أولًا.")
+        return
+
+    labels = {}
+    for _, row in computer.iterrows():
+        name = _product_note(row.get("product_name")) or "صنف كمبيوتر"
+        qty = to_number(row.get("current_stock"))
+        condition = _product_note(row.get("device_condition"))
+        condition_text = f" — {condition}" if condition else ""
+        labels[f'{name} [{row["product_code"]}] — الكمية {qty:g}{condition_text}'] = str(
+            row["product_code"]
+        )
+
+    choice = st.selectbox(
+        "اختر الصنف المراد سحبه",
+        options=list(labels.keys()),
+        width="stretch",
+        key="computer_withdraw_select",
+    )
+    code = labels[choice]
+    product = next(
+        (r for _, r in computer.iterrows() if str(r["product_code"]).strip() == code),
+        None,
+    )
+    if product is None:
+        st.warning("لم يتم العثور على الصنف المحدد.")
+        return
+
+    stock = to_number(product.get("current_stock"))
+    location = _product_note(product.get("storage_location")) or COMPUTER_STORAGE_SECTION
+    condition = _product_note(product.get("device_condition")) or "—"
+    specs = _product_note(product.get("serial_number")) or "—"
+    st.caption(
+        f"الكمية الحالية: **{stock:g}** • مكان التخزين: **{location}** • "
+        f"التصنيف: **{condition}** • المواصفات: **{specs}**"
+    )
+    if stock <= 0:
+        st.warning("لا يوجد رصيد متاح من هذا الصنف حاليًا.")
+        return
+
+    with st.form("computer_withdraw_form", clear_on_submit=True):
+        st.markdown("#### بيانات سحب صنف الكمبيوتر")
+        qty = st.number_input(
+            "الكمية المسحوبة *",
+            min_value=0.0,
+            step=1.0,
+            value=None,
+            placeholder="",
+            width="stretch",
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            person = st.text_input(
+                "اسم الساحب / المستلم *", placeholder="", width="stretch"
+            )
+        with c2:
+            supervisor = st.text_input(
+                "اسم المسؤول / أمين المخزن *", placeholder="", width="stretch"
+            )
+
+        stamp_now = datetime.now()
+        d1, h1, m1, a1 = st.columns(4)
+        with d1:
+            wdate = st.date_input("تاريخ السحب", value=stamp_now.date(), width="stretch")
+        with h1:
+            hour12 = st.selectbox(
+                "الساعة",
+                options=list(range(1, 13)),
+                index=(stamp_now.hour % 12 or 12) - 1,
+                width="stretch",
+            )
+        with m1:
+            minute = st.selectbox(
+                "الدقيقة",
+                options=list(range(0, 60)),
+                index=stamp_now.minute,
+                format_func=lambda m: f"{m:02d}",
+                width="stretch",
+            )
+        with a1:
+            ampm = st.selectbox(
+                "ص / م",
+                options=["ص", "م"],
+                index=0 if stamp_now.hour < 12 else 1,
+                width="stretch",
+            )
+        notes = st.text_area(
+            "ملاحظات السحب", placeholder="", height=80, width="stretch"
+        )
+        submitted = st.form_submit_button(
+            "📤 تسجيل سحب الصنف", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    hour24 = (int(hour12) % 12) + (12 if ampm == "م" else 0)
+    stamp = (
+        f"{wdate.strftime('%Y-%m-%d')} {hour24:02d}:{int(minute):02d}:00"
+        if wdate
+        else ""
+    )
+    ok, msg = withdraw_computer_item(
+        code, qty, person, stamp, supervisor, notes=notes
+    )
+    if ok:
+        st.success(msg)
+        st.rerun()
+    else:
+        st.error(msg)
+
+
+def _render_computer_withdrawals(computer) -> None:
+    withdrawals = get_withdrawals()
+    if withdrawals.empty:
+        st.info("لا توجد عمليات سحب لمستلزمات الكمبيوتر بعد.")
+        return
+
+    computer_codes = {
+        _product_note(row.get("product_code")) for _, row in computer.iterrows()
+    }
+    computer_codes.discard("")
+    if not computer_codes:
+        st.info("لا توجد عمليات سحب لمستلزمات الكمبيوتر بعد.")
+        return
+
+    history = withdrawals[
+        withdrawals["product_code"].apply(_product_note).isin(computer_codes)
+    ].copy()
+    if history.empty:
+        st.info("لا توجد عمليات سحب لمستلزمات الكمبيوتر بعد.")
+        return
+
+    search = st.text_input(
+        "🔍 ابحث بالكود أو الاسم أو اسم الساحب أو المسؤول",
+        placeholder="",
+        key="computer_withdraw_search",
+        width="stretch",
+    )
+    if search.strip():
+        term = search.strip()
+        mask = (
+            history["product_code"].astype(str).str.contains(term, case=False, na=False)
+            | history["product_name"].astype(str).str.contains(term, case=False, na=False)
+            | history["withdrawn_by"].astype(str).str.contains(term, case=False, na=False)
+            | history["supervisor_name"].astype(str).str.contains(term, case=False, na=False)
+        )
+        history = history[mask]
+        if history.empty:
+            st.info("لا توجد عمليات سحب مطابقة للبحث.")
+            return
+
+    movements = get_movements()
+    fallback_map = {
+        _product_note(row.get("product_code")): to_number(row.get("current_stock"))
+        for _, row in computer.iterrows()
+    }
+    condition_map = {
+        _product_note(row.get("product_code")): _product_note(row.get("device_condition"))
+        for _, row in computer.iterrows()
+    }
+    specs_map = {
+        _product_note(row.get("product_code")): _product_note(row.get("serial_number"))
+        for _, row in computer.iterrows()
+    }
+
+    rows = []
+    for _, row in history.iloc[::-1].iterrows():
+        code = _product_note(row.get("product_code"))
+        remaining = _remaining_quantity(row, movements, fallback_map.get(code))
+        rows.append(
+            {
+                "التاريخ والوقت": _product_note(row.get("withdraw_date")),
+                "الكود": code,
+                "اسم الصنف": _product_note(row.get("product_name")),
+                "الكمية المسحوبة": to_number(row.get("qty")),
+                "الرصيد المتبقي": "" if remaining is None else f"{remaining:g}",
+                "التصنيف": condition_map.get(code) or "—",
+                "المواصفات / الأرقام التسلسلية": specs_map.get(code) or "—",
+                "اسم الساحب / المستلم": _product_note(row.get("withdrawn_by")),
+                "اسم المسؤول / أمين المخزن": _product_note(row.get("supervisor_name")),
+                "ملاحظات": _product_note(row.get("notes")),
+                "وقت التسجيل": _product_note(row.get("created_at")),
+            }
+        )
+
+    total_qty = sum(to_number(row.get("qty")) for _, row in history.iterrows())
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("عدد عمليات السحب", len(history), width="stretch")
+    with c2:
+        st.metric("إجمالي الكمية المسحوبة", f"{total_qty:g}", width="stretch")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def page_computer() -> None:
+    header("💻 قسم مستلزمات الكمبيوتر", "إدارة مستلزمات الكمبيوتر ومواصفاتها وتصنيفها")
+    st.caption(
+        f"يعرض هذا القسم مستلزمات الكمبيوتر فقط. "
+        f"تُخزَّن تلقائيًا في «{COMPUTER_STORAGE_SECTION}» عند ترك مكان التخزين فارغًا."
+    )
+
+    computer = get_computer_products().copy()
+    if not computer.empty:
+        for column in (
+            "storage_location",
+            "purchase_date",
+            "serial_number",
+            "device_condition",
+        ):
+            if column not in computer.columns:
+                computer[column] = ""
+        computer["_qty"] = computer["current_stock"].apply(to_number)
+        computer["_condition"] = computer["device_condition"].apply(_product_note)
+        new_qty = computer.loc[computer["_condition"] == DEVICE_CONDITIONS[0], "_qty"].sum()
+        old_qty = computer.loc[computer["_condition"] == DEVICE_CONDITIONS[1], "_qty"].sum()
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("عدد الأصناف", len(computer), width="stretch")
+        with c2:
+            st.metric("إجمالي الكمية", f"{computer['_qty'].sum():g}", width="stretch")
+        with c3:
+            st.metric("كمية جديدة", f"{new_qty:g}", width="stretch")
+        with c4:
+            st.metric("كمية قديمة", f"{old_qty:g}", width="stretch")
+
+    tab_list, tab_withdraw, tab_history, tab_add, tab_edit, tab_delete = st.tabs(
+        [
+            "📋 المستلزمات",
+            "📤 سحب صنف",
+            "📜 سجل السحب",
+            "➕ إضافة صنف",
+            "✏️ تعديل صنف",
+            "🗑️ حذف صنف",
+        ]
+    )
+    with tab_add:
+        _render_computer_add_form()
+    with tab_edit:
+        _render_computer_edit_form(computer)
+    with tab_withdraw:
+        _render_computer_withdraw_form(computer)
+    with tab_history:
+        _render_computer_withdrawals(computer)
+    with tab_delete:
+        _render_product_delete_form(
+            computer, "computer", "لا توجد مستلزمات كمبيوتر للحذف."
+        )
+    with tab_list:
+        if computer.empty:
+            st.info("لا توجد مستلزمات كمبيوتر بعد — أضف أول صنف من تبويب «إضافة صنف».")
+            return
+
+        f1, f2 = st.columns([2, 1])
+        with f1:
+            search = st.text_input(
+                "🔍 ابحث بالكود أو الاسم أو المواصفات أو مكان التخزين",
+                placeholder="",
+                key="computer_search",
+                width="stretch",
+            )
+        with f2:
+            condition_filter = st.selectbox(
+                "تصنيف الجهاز",
+                options=["كل التصنيفات"] + DEVICE_CONDITIONS,
+                width="stretch",
+                key="computer_condition_filter",
+            )
+
+        view = computer
+        if search.strip():
+            term = search.strip()
+            mask = (
+                view["product_code"].astype(str).str.contains(term, case=False, na=False)
+                | view["product_name"].astype(str).str.contains(term, case=False, na=False)
+                | view["serial_number"].astype(str).str.contains(term, case=False, na=False)
+                | view["storage_location"].astype(str).str.contains(term, case=False, na=False)
+            )
+            view = view[mask]
+        if condition_filter != "كل التصنيفات":
+            view = view[view["device_condition"].apply(_product_note) == condition_filter]
+
+        st.write("")
+        st.markdown(f"#### 💻 مستلزمات الكمبيوتر ({len(view)})")
+        _render_computer_table(view, "لا توجد أصناف مطابقة للبحث.")
+
+
+# --------------------------------------------------------------------------- #
+#                    8) صفحة استمارات الهيئة (الوارد والصرف)
+# --------------------------------------------------------------------------- #
+def _render_authority_forms_receive_form() -> None:
+    current = get_authority_forms_count()
+    st.caption(f"العدد المتاح حاليًا: **{current:g}** — سيُضاف إليه الوارد الجديد تلقائيًا.")
+    with st.form("authority_forms_receive_form", clear_on_submit=True):
+        st.markdown("#### 📥 تسجيل كمية واردة من الهيئة")
+        c1, c2 = st.columns(2)
+        with c1:
+            item_name = st.text_input("اسم الصنف *", placeholder="", width="stretch")
+        with c2:
+            item_code = st.text_input(
+                "كود الصنف", placeholder="اختياري", width="stretch"
+            )
+        c3, c4 = st.columns(2)
+        with c3:
+            qty = st.number_input(
+                "الكمية المستلمة *",
+                min_value=0.0,
+                step=1.0,
+                value=None,
+                placeholder="",
+                width="stretch",
+            )
+        with c4:
+            receipt_date = st.date_input(
+                "تاريخ الاستلام", value=date.today(), width="stretch"
+            )
+        receiver = st.text_input(
+            "اسم المستلم *",
+            value=current_username() or "",
+            width="stretch",
+        )
+        notes = st.text_area(
+            "ملاحظات الاستلام", placeholder="", height=80, width="stretch"
+        )
+        submitted = st.form_submit_button(
+            "📥 تسجيل الوارد", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    ok, msg = receive_authority_forms(
+        item_name,
+        qty,
+        receipt_date.strftime("%Y-%m-%d") if receipt_date else "",
+        receiver,
+        item_code=item_code,
+        notes=notes,
+    )
+    if ok:
+        st.success(msg)
+        st.rerun()
+    else:
+        st.error(msg)
+
+
+def _render_authority_forms_withdrawal_form() -> None:
+    current = get_authority_forms_count()
+    st.caption(
+        f"العدد المتاح حاليًا: **{current:g}** — ستُخصم الكمية المصروفة تلقائيًا."
+    )
+
+    if current <= 0:
+        st.info("لا يوجد رصيد متاح للصرف حاليًا. سجّل كمية واردة أولًا.")
+        return
+
+    items = get_authority_form_items()
+    items = items[items["available_qty"] > 0].copy()
+    items["withdrawable"] = items["available_qty"].clip(upper=current)
+    items = items[items["withdrawable"] > 0].reset_index(drop=True)
+    if items.empty:
+        st.info("لا توجد أصناف متاحة للصرف حاليًا. سجّل كمية واردة أولًا.")
+        return
+
+    labels = [
+        f"{row['item_name']} — {row['item_code']} (متاح: {row['withdrawable']:g})"
+        for _, row in items.iterrows()
+    ]
+    selected_index = st.selectbox(
+        "اسم الصنف *",
+        options=list(range(len(items))),
+        format_func=lambda index: labels[index],
+        key="authority_forms_withdraw_item",
+    )
+    selected = items.iloc[selected_index]
+    item_name = str(selected["item_name"])
+    item_code = str(selected["item_code"])
+    available = to_number(selected["withdrawable"])
+    st.text_input("كود الصنف", value=item_code, disabled=True, width="stretch")
+
+    with st.form("authority_forms_withdrawal_form", clear_on_submit=True):
+        st.markdown("#### 📤 تسجيل كمية مصروفة من استمارات الهيئة")
+        c1, c2 = st.columns(2)
+        with c1:
+            qty = st.number_input(
+                "الكمية المصروفة *",
+                min_value=0.0,
+                max_value=float(available),
+                step=1.0,
+                value=None,
+                placeholder="",
+                width="stretch",
+            )
+        with c2:
+            withdrawal_date = st.date_input(
+                "تاريخ السحب", value=date.today(), width="stretch"
+            )
+        username = st.text_input(
+            "اسم المستخدم القائم بالصرف *",
+            value=current_username() or "",
+            width="stretch",
+        )
+        notes = st.text_area(
+            "ملاحظات الصرف", placeholder="", height=80, width="stretch"
+        )
+        submitted = st.form_submit_button(
+            "📤 تسجيل الصرف", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    ok, msg = withdraw_authority_forms(
+        item_name,
+        item_code,
+        qty,
+        username,
+        withdrawal_date.strftime("%Y-%m-%d") if withdrawal_date else "",
+        notes=notes,
+    )
+    if ok:
+        st.success(msg)
+        st.rerun()
+    else:
+        st.error(msg)
+
+
+def _render_authority_forms_receipts_log() -> None:
+    receipts = get_authority_form_receipts()
+    if receipts.empty:
+        st.info("لا توجد كميات واردة مسجلة بعد.")
+        return
+
+    search = st.text_input(
+        "🔍 ابحث باسم الصنف أو المستلم أو التاريخ",
+        placeholder="",
+        key="authority_forms_receipt_search",
+        width="stretch",
+    )
+    history = receipts
+    if search.strip():
+        term = search.strip()
+        mask = (
+            history["product_name"].astype(str).str.contains(term, case=False, na=False)
+            | history["person"].astype(str).str.contains(term, case=False, na=False)
+            | history["movement_date"].astype(str).str.contains(term, case=False, na=False)
+        )
+        history = history[mask]
+        if history.empty:
+            st.info("لا توجد كميات واردة مطابقة للبحث.")
+            return
+
+    rows = []
+    for _, row in history.iloc[::-1].iterrows():
+        rows.append(
+            {
+                "اسم الصنف": _product_note(row.get("product_name")),
+                "كود الصنف": _product_note(row.get("product_code")),
+                "الكمية المستلمة": to_number(row.get("qty")),
+                "تاريخ الاستلام": _product_note(row.get("movement_date")),
+                "اسم المستلم": _product_note(row.get("person")),
+                "العدد المتاح بعد الاستلام": to_number(row.get("balance_after")),
+                "ملاحظات": _product_note(row.get("notes")),
+                "وقت التسجيل": _product_note(row.get("created_at")),
+            }
+        )
+
+    total_qty = sum(to_number(row.get("qty")) for _, row in history.iterrows())
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("عدد عمليات الاستلام", len(history), width="stretch")
+    with c2:
+        st.metric("إجمالي الكمية الواردة", f"{total_qty:g}", width="stretch")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def _render_authority_forms_delete_form() -> None:
+    receipts = get_authority_form_receipts()
+    if receipts.empty:
+        st.info("لا توجد أصناف استمارات مسجلة للحذف.")
+        return
+    items = get_authority_form_items()
+    if items.empty:
+        st.info("لا توجد أصناف استمارات مسجلة للحذف.")
+        return
+
+    pair_set = {
+        (
+            _product_note(row.get("product_name")),
+            _product_note(row.get("product_code")) or "AUTHORITY_FORMS",
+        )
+        for _, row in receipts.iterrows()
+    }
+    labels = {}
+    for _, row in items.iterrows():
+        pair = (
+            _product_note(row.get("item_name")),
+            _product_note(row.get("item_code")) or "AUTHORITY_FORMS",
+        )
+        if pair not in pair_set:
+            continue
+        labels[
+            f"{pair[0]} — {pair[1]} (متاح: {to_number(row.get('available_qty')):g})"
+        ] = pair
+
+    if not labels:
+        st.info("لا توجد أصناف استمارات مسجلة للحذف.")
+        return
+
+    with st.form("delete_authority_form_item_form"):
+        st.markdown("#### 🗑️ حذف صنف استمارات الهيئة")
+        st.caption(
+            "سيُحذف الصنف مع كل سجلات الوارد والصرف الخاصة به من Google Sheets، "
+            "ويُخصم المتاح منه من رصيد استمارات الهيئة."
+        )
+        choice = st.selectbox(
+            "اختر الصنف",
+            options=list(labels.keys()),
+            index=None,
+            placeholder="",
+            width="stretch",
+        )
+        confirmed = st.checkbox(
+            "أؤكد حذف الصنف وسجلاته نهائيًا", width="stretch"
+        )
+        submitted = st.form_submit_button(
+            "🗑️ حذف الصنف", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+    if choice is None:
+        st.warning("⚠️ يرجى اختيار الصنف المراد حذفه.")
+        return
+    if not confirmed:
+        st.warning("⚠️ يرجى تحديد مربع التأكيد قبل الحذف.")
+        return
+
+    name, code = labels[choice]
+    ok, msg = delete_authority_form_item(name, code)
+    if ok:
+        st.success(msg)
+        st.rerun()
+    else:
+        st.error(msg)
+
+
+def page_authority_forms() -> None:
+    header(
+        "📄 استمارات الهيئة",
+        "تسجيل الكميات الواردة والمصروفة ومتابعة العدد المتاح",
+    )
+    st.caption(
+        "يسجّل هذا القسم الكميات الواردة من الهيئة باسم الصنف وكوده وتاريخ الاستلام "
+        "واسم المستلم، والكميات المصروفة بتحديد الصنف وتاريخ السحب واسم المستخدم، "
+        "مع تحديث العدد تلقائيًا."
+    )
+
+    current = get_authority_forms_count()
+    receipts = get_authority_form_receipts()
+    withdrawals = get_authority_form_withdrawals()
+    total_received = sum(to_number(row.get("qty")) for _, row in receipts.iterrows())
+    total_withdrawn = sum(to_number(row.get("qty")) for _, row in withdrawals.iterrows())
+    last_withdrawal = (
+        _product_note(withdrawals.iloc[-1].get("movement_date"))
+        if not withdrawals.empty
+        else "—"
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("العدد الحالي", f"{current:g}", width="stretch")
+    with c2:
+        st.metric("إجمالي الوارد", f"{total_received:g}", width="stretch")
+    with c3:
+        st.metric("إجمالي المصروف", f"{total_withdrawn:g}", width="stretch")
+    with c4:
+        st.metric("آخر تاريخ سحب", last_withdrawal or "—", width="stretch")
+
+    tab_receive, tab_withdraw, tab_receipts, tab_delete = st.tabs(
+        ["📥 تسجيل وارد", "📤 تسجيل صرف", "📜 سجل الوارد", "🗑️ حذف صنف"]
+    )
+    with tab_receive:
+        _render_authority_forms_receive_form()
+    with tab_withdraw:
+        _render_authority_forms_withdrawal_form()
+    with tab_receipts:
+        _render_authority_forms_receipts_log()
+    with tab_delete:
+        _render_authority_forms_delete_form()
+
+
+# --------------------------------------------------------------------------- #
+#                    9) صفحة تكهين الأجهزة
+# --------------------------------------------------------------------------- #
+def page_decommission() -> None:
+    header(
+        "🗑️ تكهين الأجهزة",
+        "تسجيل تكهين أجهزة PCR ومستلزمات الكمبيوتر وتحديث حالتها",
+    )
+    st.caption(
+        "اختر مصدر الجهاز ثم الجهاز المطلوب، وأدخل تاريخ التكهين وسببه واسم القائم "
+        f"بالتكهين. تُحدَّث حالة الجهاز تلقائيًا إلى «{DEVICE_STATUS_DECOMMISSIONED}»."
+    )
+
+    pcr = get_pcr_products().copy()
+    computer = get_computer_products().copy()
+    for frame in (pcr, computer):
+        for column in (
+            "serial_number",
+            "device_status",
+            "decommission_date",
+            "decommission_reason",
+            "decommissioned_by",
+        ):
+            if column not in frame.columns:
+                frame[column] = ""
+
+    pcr_done = pcr[
+        pcr["device_status"].apply(_product_note) == DEVICE_STATUS_DECOMMISSIONED
+    ] if not pcr.empty else pcr
+    computer_done = computer[
+        computer["device_status"].apply(_product_note) == DEVICE_STATUS_DECOMMISSIONED
+    ] if not computer.empty else computer
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("إجمالي الأجهزة المكهنة", len(pcr_done) + len(computer_done), width="stretch")
+    with c2:
+        st.metric("أجهزة PCR المكهنة", len(pcr_done), width="stretch")
+    with c3:
+        st.metric("مستلزمات الكمبيوتر المكهنة", len(computer_done), width="stretch")
+
+    st.write("")
+    st.markdown("#### ➕ تسجيل تكهين جهاز")
+    source_options = {
+        "🧬 أجهزة PCR": PRODUCT_CATEGORY_PCR,
+        "💻 مستلزمات الكمبيوتر": PRODUCT_CATEGORY_COMPUTER,
+    }
+    source_label = st.selectbox(
+        "مصدر الجهاز *",
+        options=list(source_options.keys()),
+        key="decommission_source",
+        width="stretch",
+    )
+    source_category = source_options[source_label]
+    devices = pcr if source_category == PRODUCT_CATEGORY_PCR else computer
+
+    if devices.empty:
+        st.info("لا توجد أجهزة مسجلة في المصدر المحدد.")
+        choice = None
+    else:
+        active = devices[
+            devices["device_status"].apply(_product_note) != DEVICE_STATUS_DECOMMISSIONED
+        ].copy()
+        if active.empty:
+            st.info("جميع أجهزة هذا المصدر مكهنة بالفعل.")
+            choice = None
+        else:
+            labels = {}
+            for _, row in active.iterrows():
+                serial = _product_note(row.get("serial_number")) or "بدون رقم تسلسلي"
+                labels[
+                    f"{_product_note(row.get('product_name')) or 'جهاز'} — "
+                    f"{_product_note(row.get('product_code'))} — {serial}"
+                ] = str(row.get("product_code"))
+            choice = st.selectbox(
+                "اختيار الجهاز *",
+                options=list(labels.keys()),
+                index=None,
+                placeholder="",
+                key="decommission_device_select",
+                width="stretch",
+            )
+
+    if devices.empty or choice is None:
+        st.caption("اختر جهازًا لعرض بياناته وتسجيل تكهينه.")
+    else:
+        code = labels[choice]
+        selected = active[
+            active["product_code"].astype(str).str.strip() == code
+        ].iloc[0]
+        st.caption(
+            f"**{_product_note(selected.get('product_name'))}** — "
+            f"الكود: `{code}` — الرقم التسلسلي: "
+            f"{_product_note(selected.get('serial_number')) or '—'} — "
+            f"الحالة الحالية: {_product_note(selected.get('device_status')) or '—'}"
+        )
+        with st.form("decommission_device_form", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                decommission_date = st.date_input(
+                    "تاريخ التكهين", value=date.today(), width="stretch"
+                )
+            with c2:
+                person = st.text_input(
+                    "اسم القائم بالتكهين *",
+                    value=current_username() or "",
+                    width="stretch",
+                )
+            reason = st.text_area(
+                "سبب التكهين *", placeholder="", height=90, width="stretch"
+            )
+            submitted = st.form_submit_button(
+                "🗑️ تأكيد التكهين", type="primary", use_container_width=True
+            )
+
+        if submitted:
+            ok, msg = decommission_device(
+                source_category,
+                code,
+                decommission_date.strftime("%Y-%m-%d") if decommission_date else "",
+                reason,
+                person,
+            )
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+    st.write("")
+    st.markdown("#### 📜 سجل الأجهزة المكهنة")
+    rows = []
+    for source_name, frame in (
+        ("أجهزة PCR", pcr_done),
+        ("مستلزمات الكمبيوتر", computer_done),
+    ):
+        if frame.empty:
+            continue
+        for _, row in frame.iterrows():
+            rows.append(
+                {
+                    "المصدر": source_name,
+                    "كود الجهاز": _product_note(row.get("product_code")),
+                    "اسم الجهاز": _product_note(row.get("product_name")),
+                    "الرقم التسلسلي": _product_note(row.get("serial_number")) or "—",
+                    "الكمية": to_number(row.get("current_stock")),
+                    "تاريخ التكهين": _product_note(row.get("decommission_date")) or "—",
+                    "سبب التكهين": _product_note(row.get("decommission_reason")) or "—",
+                    "القائم بالتكهين": _product_note(row.get("decommissioned_by")) or "—",
+                }
+            )
+
+    if not rows:
+        st.info("لا توجد أجهزة مكهنة مسجلة بعد.")
+    else:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    st.write("")
+    done_frames = [frame for frame in (pcr_done, computer_done) if not frame.empty]
+    done = (
+        pd.concat(done_frames, ignore_index=True)
+        if done_frames
+        else pd.DataFrame()
+    )
+    _render_product_delete_form(
+        done,
+        "decommissioned",
+        "لا توجد أجهزة مكهنة قابلة للحذف.",
+        "🗑️ حذف جهاز مكهّن نهائيًا",
+    )
+
+
+# --------------------------------------------------------------------------- #
+#                        10) صفحة التقارير والسجلات
 # --------------------------------------------------------------------------- #
 def page_reports() -> None:
     header("📊 التقارير والسجلات", "حالة المخزون وسجل السحوبات الكامل")
@@ -1273,6 +3983,9 @@ def page_reports() -> None:
         stock_view["min_stock"] = stock_view["min_stock"].apply(to_number)
         stock_view["starting_stock"] = stock_view["starting_stock"].apply(to_number)
         stock_view["total_withdrawn"] = stock_view["total_withdrawn"].apply(to_number)
+        if "category" not in stock_view.columns:
+            stock_view["category"] = PRODUCT_CATEGORY_GENERAL
+        stock_view["category"] = stock_view["category"].apply(normalize_category)
         stock_view["الحالة"] = stock_view.apply(
             lambda r: "⚠️ منخفض" if r["current_stock"] <= r["min_stock"] else "✅ جيد", axis=1
         )
@@ -1286,9 +3999,14 @@ def page_reports() -> None:
                 )
             ]
         # قيم التصفية الجديدة تُقرأ من الحالة قبل بناء الجدول، لأن حقولها تُنشأ أسفله
+        cat_filter = str(st.session_state.get("stock_category_filter", "الكل")).strip()
         mfr_filter = str(st.session_state.get("stock_mfr_filter", "")).strip()
         sup_filter = str(st.session_state.get("stock_sup_filter", "")).strip()
         exp_filter = str(st.session_state.get("stock_exp_filter", "")).strip()
+        if cat_filter and cat_filter != "الكل":
+            stock_view = stock_view[
+                stock_view["category"].astype(str).str.upper() == cat_filter.upper()
+            ]
         if mfr_filter:
             stock_view = stock_view[
                 stock_view["manufacturer"].astype(str).str.contains(mfr_filter, case=False, na=False)
@@ -1306,6 +4024,7 @@ def page_reports() -> None:
                 [
                     "product_code",
                     "product_name",
+                    "category",
                     "unit",
                     "starting_stock",
                     "total_withdrawn",
@@ -1322,6 +4041,7 @@ def page_reports() -> None:
                 columns={
                     "product_code": "الكود",
                     "product_name": "اسم الصنف",
+                    "category": "التصنيف",
                     "unit": "الوحدة",
                     "starting_stock": "الكمية الابتدائية",
                     "total_withdrawn": "إجمالي المسحوب",
@@ -1338,8 +4058,15 @@ def page_reports() -> None:
             hide_index=True,
         )
         st.write("")
-        st.caption("🔍 تصفية الجدول حسب بيانات الشركة والتاريخ (بحث جزئي مسموح):")
-        f1, f2, f3 = st.columns(3)
+        st.caption("🔍 تصفية الجدول حسب التصنيف وبيانات الشركة والتاريخ (بحث جزئي مسموح):")
+        f0, f1, f2, f3 = st.columns(4)
+        with f0:
+            st.selectbox(
+                "🗂️ التصنيف",
+                options=["الكل"] + PRODUCT_CATEGORIES,
+                key="stock_category_filter",
+                width="stretch",
+            )
         with f1:
             st.text_input(
                 "🔍 بحث بشركة الصنع", key="stock_mfr_filter", placeholder="", width="stretch"
@@ -1626,6 +4353,18 @@ def main() -> None:
         page_withdraw()
     elif page == PAGES[2]:
         page_items()
+    elif page == PAGES[3]:
+        page_pcr()
+    elif page == PAGES[4]:
+        page_chemicals()
+    elif page == PAGES[5]:
+        page_office()
+    elif page == PAGES[6]:
+        page_computer()
+    elif page == PAGES[7]:
+        page_authority_forms()
+    elif page == PAGES[8]:
+        page_decommission()
     elif page == ADMIN_PAGES[0]:
         page_users()
     else:
