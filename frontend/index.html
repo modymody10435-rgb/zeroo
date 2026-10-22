@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="description" content="نظام إدارة مخزن المعمل - واجهة مستقلة">
+  <title>نظام إدارة مخزن المعمل</title>
+  <link rel="stylesheet" href="/assets/css/styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230f766e'/%3E%3Cpath d='M18 22h28v6H18zm4 9h20v15H22z' fill='white'/%3E%3C/svg%3E">
+</head>
+<body>
+  <section id="login-view" class="auth-screen">
+    <div class="auth-glow auth-glow-one"></div>
+    <div class="auth-glow auth-glow-two"></div>
+    <div class="auth-card">
+      <div class="brand brand-large">
+        <span class="brand-mark">م</span>
+        <span>
+          <strong>مخزن المعمل</strong>
+          <small>نظام إدارة المخزون</small>
+        </span>
+      </div>
+      <h1>تسجيل الدخول</h1>
+      <p class="muted">أدخل بيانات حسابك للوصول إلى لوحة إدارة المخزن.</p>
+      <form id="login-form" class="stack" novalidate>
+        <label class="field">
+          <span>اسم المستخدم</span>
+          <input id="login-username" name="username" type="text" autocomplete="username" required autofocus>
+        </label>
+        <label class="field">
+          <span>كلمة المرور</span>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <p id="login-error" class="form-error" hidden></p>
+        <button id="login-submit" class="btn btn-primary btn-block" type="submit">دخول النظام</button>
+      </form>
+      <p class="auth-note">البيانات محفوظة محلياً في قاعدة SQLite على الخادم.</p>
+    </div>
+  </section>
+
+  <div id="app-view" class="app-shell" hidden>
+    <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+    <aside id="sidebar" class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">م</span>
+        <span>
+          <strong>مخزن المعمل</strong>
+          <small>إدارة المخزون</small>
+        </span>
+      </div>
+      <nav id="nav" class="nav" aria-label="التنقل الرئيسي"></nav>
+      <div class="sidebar-footer">
+        <div class="user-chip">
+          <span id="user-avatar" class="avatar">م</span>
+          <span>
+            <strong id="user-name">-</strong>
+            <small id="user-role">-</small>
+          </span>
+        </div>
+        <button id="logout-button" class="btn btn-ghost btn-block" type="button">تسجيل الخروج</button>
+      </div>
+    </aside>
+
+    <div class="main-column">
+      <header class="topbar">
+        <div class="topbar-start">
+          <button id="menu-toggle" class="icon-button" type="button" aria-label="فتح القائمة">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </button>
+          <div>
+            <h1 id="page-title">الرئيسية</h1>
+            <p id="page-subtitle" class="muted">نظرة عامة على حركة المخزن</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span id="connection-badge" class="status-badge">متصل</span>
+          <span id="date-badge" class="date-badge"></span>
+        </div>
+      </header>
+      <main id="page-content" class="content" aria-live="polite"></main>
+    </div>
+  </div>
+
+  <div id="modal-root" class="modal-root" hidden></div>
+  <div id="toast-root" class="toast-root" aria-live="assertive"></div>
+
+  <script src="/assets/js/app.js" defer></script>
+</body>
+</html>

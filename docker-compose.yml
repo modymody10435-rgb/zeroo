@@ -1,0 +1,27 @@
+services:
+  warehouse:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "${WAREHOUSE_PORT:-8000}:8000"
+    volumes:
+      - warehouse_data:/app/data
+      # فعّل السطر التالي عند الترحيل الأولي من التطبيق القديم.
+      # - ./data/offline.db:/app/data/offline.db:ro
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  warehouse_data:

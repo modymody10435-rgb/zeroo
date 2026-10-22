@@ -1,0 +1,26 @@
+[Unit]
+Description=Warehouse Management Web App
+After=network.target
+
+[Service]
+Type=simple
+User=warehouse
+Group=warehouse
+WorkingDirectory=/opt/zeroo
+EnvironmentFile=/opt/zeroo/.env
+Environment=WAREHOUSE_HOST=127.0.0.1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/zeroo/.venv/bin/python -m server
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/zeroo/data
+
+[Install]
+WantedBy=multi-user.target

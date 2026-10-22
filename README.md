@@ -1,283 +1,291 @@
 # نظام إدارة مخزن المعمل
 
-نظام ويب كامل بلغة Python + Streamlit لإدارة طلبات المعمل وصرف الأصناف من المخزن على دفعات، مع حفظ كل البيانات في **Google Sheets** كقاعدة بيانات أساسية (لا تضيع البيانات عند إعادة تشغيل التطبيق).
+تطبيق ويب عربي كامل بواجهة **RTL** مبنية بـ HTML5 وCSS3 وJavaScript، وخادم **Python/FastAPI**، وقاعدة بيانات **SQLite** محلية. التطبيق لا يعتمد على Streamlit ولا على Google Sheets لتشغيله اليومي.
 
----
+## المزايا
 
-## ✨ المميزات
+- تسجيل دخول بجلسات آمنة وصلاحيات مدير/مستخدم.
+- لوحة معلومات وإحصاءات المخزون والحركات.
+- إدارة الأصناف: PCR، الكيماويات، المكتبية، مستلزمات الكمبيوتر، وعام.
+- إضافة وتعديل وحذف الأصناف مع حد أدنى للمخزون.
+- سحب الأصناف مع إدخال **اسم الصنف وكوده** والتحقق من تطابقهما.
+- الطلبيات والأصناف المطلوبة والسحب المرتبط بالطلبية.
+- استمارات الهيئة: وارد، صرف، سجل الحركات، وحذف الأصناف.
+- إهلاك الأجهزة وسجل الإهلاك.
+- التقارير وتصدير CSV.
+- إدارة المستخدمين وكلمات المرور والأدوار.
+- واجهة متجاوبة مع الهاتف وسطح المكتب.
 
-- واجهة عربية كاملة **RTL** بتصميم عصري ومتجاوب (كمبيوتر وموبايل).
-- قائمة جانبية: الرئيسية، طلبات المعمل، الأصناف، حركة المخزن، التقارير، الإعدادات، تسجيل الخروج.
-- إنشاء طلبيات بأرقام تلقائية، وإضافة أصناف متعددة لكل طلبية.
-- صرف الطلبية **على دفعات** مع تسجيل كل عملية سحب مستقلة (الكمية، التاريخ، اسم الساحب).
-- حساب تلقائي: `المتبقي = المطلوب - إجمالي المسحوب`.
-- خصم تلقائي من رصيد المخزن عند كل سحب.
-- منع السحب بأكثر من الرصيد أو بأكثر من المتبقي في الطلبية.
-- تنبيه عند وجود كميات متبقية من **طلبية سابقة** لنفس الصنف (دون خلط الطلبيات).
-- تنبيه **"المخزون منخفض"** عند وصول الرصيد للحد الأدنى.
-- **قسم PCR مستقل**: تصنيف كل صنف (عام / PCR)، وعرض أجهزة PCR في قسم منفصل
-  داخل المخزن، مع تخزينها تلقائيًا في «قسم PCR» عند عدم تحديد مكان تخزين آخر.
-- **تتبع أجهزة PCR**: حقول مخصصة لاسم الجهاز، الرقم التسلسلي، اسم الشركة المصنعة،
-  مكان التخزين، الكمية، وحالة الجهاز (جاهز / قيد الاستخدام / تحت الصيانة / معطل / تالف / خارج الخدمة / مكهن).
-- **قسم الكيماويات المستقل**: إضافة وإدارة المواد الكيميائية بحقول مخصصة تشمل
-  اسم الشركة المصنعة، العدد، الكود، مكان التخزين، تاريخ الإضافة، وتاريخ الانتهاء،
-  مع تخزينها تلقائيًا في «قسم الكيماويات» عند عدم تحديد مكان تخزين آخر.
-- **سحب الكيماويات**: تسجيل الكمية المسحوبة مع خصم تلقائي من الرصيد المتبقي،
-  وحفظ سجل مستقل يعرض التاريخ والوقت واسم الساحب واسم المسؤول والملاحظات.
-- **قسم المكتبية المستقل**: إدارة الأصناف المكتبية بحقول اسم الصنف، العدد الإجمالي،
-  عدد الكراتين، الوحدات داخل الكرتونة، تاريخ الشراء، وتاريخ آخر سحب،
-  مع تسجيل سحب مستقل يخصم الكمية ويحدّث تاريخ السحب تلقائيًا.
-- **قسم مستلزمات الكمبيوتر المستقل**: إدارة الأصناف بحقول اسم الصنف، الكمية،
-  مكان التخزين، تاريخ الشراء، مواصفات الأجهزة أو الأرقام التسلسلية،
-  وتصنيف الجهاز (جديد / قديم)، مع بحث وتصفية حسب التصنيف.
-- **سحب مستلزمات الكمبيوتر**: تسجيل الكمية المسحوبة مع خصم تلقائي من الرصيد،
-  وحفظ سجل يعرض التاريخ والتصنيف والمواصفات واسم الساحب والمسؤول والملاحظات.
-- **استمارات الهيئة (الوارد والصرف)**: تسجيل الكميات الواردة من الهيئة باسم الصنف
-  وكوده، الكمية المستلمة، تاريخ الاستلام، واسم المستلم مع زيادة العدد المتاح تلقائيًا،
-  واختيار الصنف وكوده من قائمة منسدلة عند الصرف مع خصم تلقائي من المخزون وسجل للوارد.
-- **تكهين الأجهزة**: قسم مستقل لتسجيل تكهين أجهزة PCR ومستلزمات الكمبيوتر مع تحديد
-  مصدر الجهاز والجهاز وتاريخ التكهين وسببه واسم القائم بالتكهين، وتحديث حالة الجهاز
-  تلقائيًا إلى «مكهن» مع سجل بالأجهزة المكهنة.
-- **حذف الأصناف**: تبويب **🗑️ حذف صنف** في أقسام PCR والكيماويات والمكتبية
-  ومستلزمات الكمبيوتر واستمارات الهيئة والتكهين، مع تأكيد قبل الحذف وحذف
-  الصفوف من Google Sheets والنسخة المحلية (ولاستمارات الهيئة تُحذف سجلات الوارد
-  والصرف ويُعدّل الرصيد تلقائيًا).
-- صفحة تقارير شاملة (طلبات، سحوبات، حركة صنف، المتبقيات، الأصناف المنخفضة) مع بحث وتصفية بالتاريخ والتصدير CSV.
-- معالجة أخطاء وتحقق من صحة البيانات.
-- **عمل دون اتصال (Offline-First)**: حفظ كل الإضافات والتعديلات محليًا (SQLite) عند انقطاع الإنترنت، ومزامنتها تلقائيًا مع Google Sheets فور عودة الاتصال — بدون أي زر Sync، مع شارة حالة (Online / Offline / Syncing).
+## البنية
 
-> الصفحة الرئيسية لا تحتوي على أي بطاقة أو قسم باسم "طلبات قيد الانتظار".
-
----
-
-## 📂 بنية المشروع
-
-```
+```text
 .
-├── app.py                        # نقطة الدخول + التوجيه بين الصفحات + تسجيل الدخول
-├── requirements.txt
-├── README.md
-├── .streamlit/
-│   ├── config.toml               # إعدادات الثيم
-│   └── secrets.toml.example      # نموذج الأسرار (انسخه إلى secrets.toml)
-├── core/
-│   ├── config.py                 # قراءة الإعدادات من Secrets
-│   ├── gsheets.py                # طبقة الوصول إلى Google Sheets + المخطط (Schema)
-│   ├── offline.py                # العمل دون اتصال + طابور المزامنة التلقائية (SQLite)
-│   ├── services.py               # منطق الأعمال (أصناف، طلبات، سحب، حركات)
-│   ├── auth.py                   # تسجيل الدخول/الخروج
-│   └── styles.py                 # تنسيقات CSS RTL
-└── views/
-    ├── dashboard.py              # الرئيسية (ملخصات إحصائية)
-    ├── orders.py                 # طلبات المعمل + السحب + المتبقيات
-    ├── products.py               # الأصناف
-    ├── movements.py              # حركة المخزن
-    ├── reports.py                # التقارير
-    └── settings.py               # الإعدادات وحالة الاتصال
+├── frontend/
+│   ├── index.html
+│   └── assets/
+│       ├── css/styles.css
+│       └── js/app.js
+├── server/
+│   ├── __main__.py      # تشغيل الخادم من متغيرات البيئة
+│   ├── main.py          # تطبيق FastAPI والمسارات
+│   ├── database.py      # SQLite والترحيل والتهيئة
+│   ├── services.py      # منطق المخزن والطلبيات والتقارير
+│   ├── security.py      # كلمات المرور والجلسات
+│   ├── constants.py     # التصنيفات والحالات
+│   └── config.py        # إعدادات البيئة
+├── deploy/
+│   ├── nginx.conf
+│   └── warehouse.service
+├── data/                # قاعدة البيانات (غير مرفوعة إلى Git)
+├── Dockerfile
+├── docker-compose.yml
+├── requirements-web.txt
+├── .env.example
+└── README.md
 ```
 
----
+## التشغيل المحلي
 
-## 🔧 المتطلبات
+المتطلب: Python 3.10 أو أحدث.
 
-- Python 3.9+
-- حساب Google (لإنشاء Service Account و Google Sheet)
+### Windows
 
----
-
-## 🗂️ أوراق بيانات Google Sheets
-
-يقوم التطبيق بإنشائها وتجهيز رؤوس الأعمدة تلقائيًا عند أول تشغيل (من صفحة الإعدادات اضغط «إنشاء/فحص أوراق البيانات»):
-
-| الورقة | الأعمدة |
-|---|---|
-| `Products` | product_code, product_name, unit, current_stock, min_stock, storage_location, notes, created_at, starting_stock, total_withdrawn, date_added, manufacturer, supplier, expiry_date, added_by, category, serial_number, device_status, units_per_carton, purchase_date, last_withdraw_date, device_condition, decommission_date, decommission_reason, decommissioned_by |
-| `Orders` | order_no, order_date, factory_name, responsible_person, status, notes, created_at |
-| `Order_Items` | item_id, order_no, product_code, product_name, unit, required_qty, withdrawn_qty, last_withdraw_date, last_withdrawn_by, created_at |
-| `Withdrawals` | withdrawal_id, order_no, item_id, product_code, product_name, qty, withdraw_date, withdrawn_by, notes, created_at |
-| `Stock_Movements` | movement_no, movement_date, movement_type, order_no, product_code, product_name, qty, balance_after, person, notes, created_at |
-| `Settings` | key, value |
-
-> لا يتم حذف أي بيانات قديمة عند إنشاء طلبية أو عملية سحب؛ كل العمليات تُضاف كصفوف جديدة.
-
----
-
-## 🔑 إعداد Google Sheets API و Service Account (خطوة بخطوة)
-
-1. افتح [Google Cloud Console](https://console.cloud.google.com/) وأنشئ مشروعًا جديدًا.
-2. من **APIs & Services → Library** فعّل:
-   - **Google Sheets API**
-   - **Google Drive API**
-3. من **APIs & Services → Credentials → Create Credentials → Service Account**:
-   - أدخل اسمًا للحساب (مثال: `warehouse-bot`) ثم أنشئه.
-4. افتح الـService Account → تبويب **Keys → Add Key → Create new key → JSON**.
-   - سيتم تنزيل ملف JSON (احفظه باسم `service_account.json` بجانب `app.py` محليًا).
-   - انسخ البريد `client_email` من داخل الملف (شكله `xxx@project.iam.gserviceaccount.com`).
-5. أنشئ Google Sheet جديدًا (أو استخدم موجودًا)، ثم اضغط **مشاركة / Share** وأضف بريد الـService Account مع صلاحية **Editor**.
-6. انسخ **مفتاح الملف** من الرابط:
-   `https://docs.google.com/spreadsheets/d/<SPREADSHEET_KEY>/edit`
-
----
-
-## ⚙️ إعداد الأسرار (Secrets)
-
-انسخ `.streamlit/secrets.toml.example` إلى `.streamlit/secrets.toml` وعدّل القيم:
-
-```toml
-[gsheets]
-spreadsheet_key = "ضع_مفتاح_الملف_هنا"
-service_account_file = "service_account.json"   # محليًا فقط
-
-[auth]
-username = "admin"
-password = "غيّر_كلمة_المرور"
-app_title = "نظام إدارة مخزن المعمل"
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements-web.txt
+Copy-Item .env.example .env
 ```
 
-> ملف `secrets.toml` و `service_account.json` لا يجب رفعهما إلى Git. أضفهما إلى `.gitignore`.
+عدّل `.env` وغيّر `ADMIN_PASSWORD`، ثم شغّل:
 
----
+```powershell
+python -m server
+```
 
-## 📴 العمل دون اتصال والمزامنة التلقائية (Offline-First)
-
-- عند انقطاع الإنترنت تُحفَظ كل عمليات الإضافة/التعديل/الحذف فورًا في قاعدة بيانات
-  محلية SQLite (`data/offline.db`): طابور عمليات معلّقة + نسخة محلية من كل ورقة،
-  فتبقى شاشات التطبيق تعمل بالكامل وتقرأ آخر ما كُتب («اقرأ ما كتبت»).
-- عند عودة الاتصال يدفع **خيط خلفي تلقائي** (وأيضًا عند أي تفاعل مع التطبيق) كل
-  العمليات المعلّقة إلى Google Sheets بالترتيب نفسه — **بلا أي زر Sync أو تدخل من
-  المستخدم**، ولا تُفقد أي بيانات عند الأعطال (تبقى في الطابور وتُعاد المحاولة).
-- شارة حالة صغيرة أعلى الواجهة وفي القائمة الجانبية تتحدث تلقائيًا كل ثانيتين:
-  - 🟢 `Online` — متصل وتمت مزامنة كل البيانات.
-  - 🟠 `Offline - Saving Locally` — عدم الاتصال، الحفظ محليًا (مع عدد العمليات المعلّقة).
-  - 🔵 `Syncing…` — جارٍ دفع التغييرات المعلّقة إلى Google Sheets.
-  - 🔴 `Sync Error` — تعذّر الوصول إلى Google Sheets (تُعاد المحاولة تلقائيًا مع تأجيل متزايد).
-- **السحب الأولي**: عند أول تشغيل متصل (وكلما غابت نسخة محلية لورقة جديدة) يسحب
-  المحرك **كل أوراق الشيت** (الأصناف/الطلبيات/السحوبات/…) إلى `data/offline.db`،
-  فتتوفر كل البيانات القديمة للعمل دون اتصال مباشرة.
-- **الدخول دون اتصال**: عند أي قراءة ناجحة لورقة المستخدمين تُخزَّن تجزئات كلمات
-  المرور (PBKDF2 — لا نص صريح) في ذاكرة دخول محلية داخل `data/offline.db`،
-  وعند عدم توفّر النسخة الكاملة يتحقق التطبيق من هذه الذاكرة — فيعمل تسجيل
-  الدخول بنفس بيانات الاعتماد حتى دون إنترنت، وتتحدّث فورًا مع أي تغيير
-  (إضافة مستخدم/تغيير كلمة مرور/حذف).
-- للتجربة المحلية دون اتصال: ضع `POLIO_FORCE_OFFLINE=1` في متغيرات البيئة قبل التشغيل.
-
----
-
-## 🖥️ التشغيل محليًا
+### Linux / macOS
 
 ```bash
-# 1) إنشاء بيئة افتراضية (اختياري لكن مستحسن)
-python -m venv .venv
-.venv\Scripts\activate        # على Windows
-# source .venv/bin/activate   # على Linux/Mac
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-web.txt
+cp .env.example .env
+python -m server
+```
 
-# 2) تثبيت الحزم
+افتح `http://localhost:8000`.
+
+بيانات الدخول الأولية تكون من `ADMIN_USERNAME` و`ADMIN_PASSWORD` في `.env`. القيمة الافتراضية في `.env.example` هي `admin` مع كلمة مرور يجب تغييرها.
+
+## الإعدادات
+
+| المتغير | الافتراضي | الوصف |
+|---|---|---|
+| `APP_TITLE` | نظام إدارة مخزن المعمل | اسم التطبيق |
+| `WAREHOUSE_HOST` | `0.0.0.0` | عنوان الاستماع |
+| `WAREHOUSE_PORT` | `8000` | منفذ التطبيق |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | الوكلاء الموثوقون لترويسات `X-Forwarded-*` |
+| `WAREHOUSE_DB_PATH` | `data/warehouse.sqlite3` | مسار قاعدة SQLite |
+| `OFFLINE_DB_PATH` | `data/offline.db` | مصدر الترحيل القديم |
+| `MIGRATE_OFFLINE_DB` | `1` | تفعيل الترحيل عند أول تشغيل |
+| `ADMIN_USERNAME` | `admin` | اسم المدير الأولي |
+| `ADMIN_PASSWORD` | `admin123` | كلمة مرور المدير الأولية، وغيّرها في `.env` |
+| `SESSION_DAYS` | `14` | مدة الجلسة بالأيام |
+| `COOKIE_NAME` | `warehouse_session` | اسم ملف الجلسة |
+| `COOKIE_SECURE` | `0` | اجعله `1` عند استخدام HTTPS |
+| `COOKIE_SAMESITE` | `lax` | سياسة SameSite |
+| `TRUSTED_ORIGINS` | فارغ | نطاقات مسموحة عند فصل الواجهة |
+
+ملاحظات:
+
+- في الإنتاج استخدم مساراً مطلقاً لقاعدة البيانات، مثل `/var/lib/warehouse/warehouse.sqlite3`.
+- لا ترفع `.env` أو قاعدة البيانات إلى Git.
+- عند تشغيل الواجهة والخادم على نطاقين مختلفين، أضف نطاق الواجهة إلى `TRUSTED_ORIGINS` واستخدم `COOKIE_SECURE=1` و`COOKIE_SAMESITE=none`.
+- شغّل نسخة خادم واحدة مع SQLite. لا تستخدم عدة replicas على نفس ملف قاعدة البيانات.
+
+## الترحيل من التطبيق القديم
+
+1. ضع نسخة قاعدة التطبيق القديم في `data/offline.db`.
+2. تأكد أن `MIGRATE_OFFLINE_DB=1`.
+3. احذف `data/warehouse.sqlite3` إن كان موجوداً من محاولة سابقة قبل الترحيل.
+4. شغّل الخادم مرة واحدة. يتم إنشاء الجداول ونقل المستخدمين والأصناف والطلبيات والحركات والإعدادات.
+5. يتم ضبط كلمة مرور المدير على قيمة `ADMIN_PASSWORD` أثناء الترحيل.
+6. تحقق من الأرصدة والحركات قبل إيقاف التطبيق القديم.
+
+بعد نجاح الترحيل يمكن ضبط `MIGRATE_OFFLINE_DB=0`، مع الاحتفاظ بنسخة من `offline.db` للرجوع إليها.
+
+## النشر باستخدام Docker
+
+```bash
+cp .env.example .env
+# عدّل .env وغيّر ADMIN_PASSWORD
+docker compose up -d --build
+docker compose logs -f warehouse
+```
+
+- المنفذ الافتراضي: `8000`.
+- قاعدة البيانات محفوظة في volume باسم `warehouse_data`.
+- للترحيل الأولي، فعّل السطر الخاص بـ `./data/offline.db` في `docker-compose.yml`.
+- فحص الصحة: `http://SERVER_IP:8000/api/health`.
+- أوقف الخدمة باستخدام `docker compose down` مع إبقاء الـ volume.
+
+لتغيير المنفذ الخارجي:
+
+```bash
+WAREHOUSE_PORT=8080 docker compose up -d
+```
+
+## النشر على خادم Linux مع systemd وNginx
+
+### 1. تجهيز التطبيق
+
+```bash
+sudo useradd --system --create-home --shell /usr/sbin/nologin warehouse
+sudo mkdir -p /opt/zeroo
+sudo chown warehouse:warehouse /opt/zeroo
+```
+
+انسخ ملفات المشروع إلى `/opt/zeroo`، ثم:
+
+```bash
+cd /opt/zeroo
+sudo -u warehouse python3 -m venv .venv
+sudo -u warehouse .venv/bin/pip install -r requirements-web.txt
+sudo -u warehouse cp .env.example .env
+sudo -u warehouse mkdir -p data
+sudo chmod 750 data
+sudo -u warehouse nano .env
+```
+
+غيّر `ADMIN_PASSWORD`، واضبط `WAREHOUSE_DB_PATH=/opt/zeroo/data/warehouse.sqlite3` و`WAREHOUSE_HOST=127.0.0.1`، واجعل `COOKIE_SECURE=1` بعد تفعيل HTTPS.
+
+### 2. خدمة systemd
+
+```bash
+sudo cp deploy/warehouse.service /etc/systemd/system/warehouse.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now warehouse
+sudo systemctl status warehouse
+sudo journalctl -u warehouse -f
+```
+
+الخدمة تستمع على `127.0.0.1:8000` فقط، ويتولى Nginx الوصول الخارجي. إذا غيّرت `WAREHOUSE_PORT` فحدّث `proxy_pass` في `deploy/nginx.conf` بنفس المنفذ.
+
+### 3. Nginx
+
+```bash
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/warehouse
+sudo ln -s /etc/nginx/sites-available/warehouse /etc/nginx/sites-enabled/warehouse
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+ثم فعّل HTTPS باستخدام Certbot أو شهادة الخادم، وبعدها غيّر `COOKIE_SECURE=1` وأعد تشغيل الخدمة:
+
+```bash
+sudo systemctl restart warehouse
+```
+
+### 4. الجدار الناري
+
+اسمح فقط بالمنافذ المطلوبة، مثل:
+
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+```
+
+لا تفتح المنفذ `8000` للإنترنت عند استخدام Nginx. وإن كان الخادم خلف موازن أحمال، اجعل `--forwarded-allow-ips` مطابقاً لعنوان الموازن بدلاً من `*`.
+
+## النسخ الاحتياطي والتحديث
+
+### نسخة احتياطية من SQLite
+
+يفضل استخدام أمر SQLite بدلاً من نسخ الملف أثناء الكتابة:
+
+```bash
+sqlite3 data/warehouse.sqlite3 ".backup 'backups/warehouse-$(date +%F).sqlite3'"
+```
+
+أو أوقف الخدمة ثم انسخ الملف:
+
+```bash
+sudo systemctl stop warehouse
+sudo cp /opt/zeroo/data/warehouse.sqlite3 /var/backups/warehouse-$(date +%F).sqlite3
+sudo systemctl start warehouse
+```
+
+### تحديث التطبيق
+
+```bash
+cd /opt/zeroo
+sudo -u warehouse .venv/bin/pip install -r requirements-web.txt
+sudo systemctl restart warehouse
+```
+
+اختبر `/api/health` بعد كل تحديث.
+
+## واجهات API
+
+كل المسارات تحت `/api`:
+
+- `GET /api/health` فحص الصحة.
+- `GET /api/meta` التصنيفات والحالات.
+- `POST /api/auth/login`، `POST /api/auth/logout`، `GET /api/auth/me`.
+- `GET/POST /api/products`، `GET/PUT/DELETE /api/products/{code}`.
+- `POST /api/products/{code}/decommission` و`GET /api/decommissioned`.
+- `POST/GET /api/withdrawals` و`DELETE /api/withdrawals/{id}`.
+- `GET/POST /api/orders` وإدارة عناصر الطلبية وحالتها.
+- `GET /api/authority` مع مسارات الوارد والصرف والحذف.
+- `GET /api/reports/summary` و`movements` و`withdrawals` و`low-stock` و`export.csv`.
+- `/api/users` لإدارة المستخدمين، للمدير فقط.
+
+الطلبات المعدلة `POST/PUT/PATCH/DELETE` يجب أن تحمل الترويسة:
+
+```text
+X-Requested-With: XMLHttpRequest
+```
+
+مثال فحص سريع:
+
+```bash
+curl http://localhost:8000/api/health
+```
+
+## الاختبار
+
+```bash
+python -m compileall -q server
+node --check frontend/assets/js/app.js
+```
+
+فحص يدوي مختصر:
+
+1. سجّل الدخول.
+2. أضف صنفاً وعدّله.
+3. اسحب كمية بإدخال الاسم والكود معاً.
+4. أنشئ طلبية وأضف صنفاً واسحب منه.
+5. استلم واستخدم استمارة هيئة.
+6. أهلك جهازاً وراجع السجل.
+7. صدّر تقرير CSV.
+8. أضف مستخدماً وغيّر كلمة مروره.
+
+## التطبيق القديم
+
+الملفات القديمة `app.py` و`core/` و`views/` و`.streamlit/` بقيت في المشروع كمرجع، لكن التطبيق الجديد لا يحتاجها. لتشغيل النسخة القديمة:
+
+```bash
 pip install -r requirements.txt
-
-# 3) ضع ملف service_account.json بجانب app.py، وعدّل .streamlit/secrets.toml
-
-# 4) التشغيل
 streamlit run app.py
 ```
 
-ثم افتح المتصفح على `http://localhost:8501` وسجّل الدخول باسم المستخدم وكلمة المرور من `secrets.toml`.
+النسخة القديمة تعمل على `http://localhost:8501` وتستخدم Google Sheets. لا تشارك `.streamlit/secrets.toml` أو مفاتيح Google، ولا تستخدمها في التطبيق الجديد.
 
----
+## ملاحظات أمنية
 
-## 📦 تجميع التطبيق (Windows)
-
-يمكن توزيع التطبيق على أجهزة أخرى بدون تثبيت بايثون عبر تجميعه بـPyInstaller:
-
-```powershell
-# من داخل مجلد المشروع (يحتاج اتصال إنترنت لتثبيت الحزم أول مرة)
-powershell -ExecutionPolicy Bypass -File build_exe.ps1
-```
-
-- المخرج (الافتراضي — **أسرع في الفتح**): مجلد `dist\PolioStock\` — انسخه كاملًا
-  إلى الجهاز الهدف وشغّل `PolioStock\PolioStock.exe` (بدء فوري بلا استخراج).
-- بديل ملف واحد أسهل للتوزيع وأبطأ عند كل تشغيل (يستخرج ~138 ميجا لحظيًا):
-  `build_exe.ps1 -SingleExe` → `dist\PolioStock.exe`.
-- **يشتغل كبرنامج سطح مكتب**: بدون نافذة سوداء، وتفتح نافذة تطبيق مستقلة (عبر Edge/Chrome بوضع `--app`) بدون شريط تبويبات.
-- **إعادة تشغيل الملف** تفتح النافذة مباشرة دون تشغيل خادم ثانٍ؛ للإغلاق الكامل استخدم زر **«⏻ إغلاق التطبيق»** في الشريط الجانبي.
-- سجل التشغيل والأخطاء: `PolioStock.log` بجانب الملف.
-- **بعد نسخ المجلد** ضع ملفات الاعتماد **بجانب الملف التنفيذي** ثم شغّله:
-
-  ```
-  PolioStock\
-  ├── PolioStock.exe
-  ├── .streamlit\secrets.toml   ← مفتاح الشيت وإعدادات الدخول
-  ├── service_account.json      ← (اختياري إن كانت بيانات الخدمة داخل secrets.toml)
-  └── data\                     ← يُنشأ تلقائيًا (قاعدة العمل دون اتصال)
-  ```
-
-- أول تشغيل متصل يُنزّل بيانات الشيت محليًا في الخلفية (السحب الأولي) — الصفحة تفتح فورًا دون انتظاره.
-- `app.spec` هو ملف إعدادات البناء (`POLIO_BUILD_MODE=single|onedir`).
-- فحص سريع للحزمة (اختياري): `WAREHOUSE_SELFTEST=1 PolioStock.exe` — يطبع النتيجة في `PolioStock.log`.
-
----
-
-## ☁️ التشغيل على Streamlit Cloud
-
-1. ارفع المشروع إلى مستودع GitHub (بدون `secrets.toml` أو `service_account.json`).
-2. من [share.streamlit.io](https://share.streamlit.io) اضغط **New app** واختر المستودع وملف `app.py`.
-3. من **Settings → Secrets** الصق الإعدادات التالية:
-
-```toml
-[gsheets]
-spreadsheet_key = "ضع_مفتاح_الملف_هنا"
-
-[auth]
-username = "admin"
-password = "غيّر_كلمة_المرور"
-app_title = "نظام إدارة مخزن المعمل"
-
-[gcp_service_account]
-type = "service_account"
-project_id = "..."
-private_key_id = "..."
-private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-client_email = "warehouse-bot@project.iam.gserviceaccount.com"
-client_id = "..."
-auth_uri = "https://accounts.google.com/o/oauth2/auth"
-token_uri = "https://oauth2.googleapis.com/token"
-auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
-client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/warehouse-bot%40project.iam.gserviceaccount.com"
-universe_domain = "googleapis.com"
-```
-
-> انسخ قيم `[gcp_service_account]` حرفيًا من ملف JSON الذي نزّلته (مع الإبقاء على `\n` داخل `private_key`).
-
-4. اضغط **Deploy**. عند أول تشغيل انتقل إلى صفحة **الإعدادات** واضغط «إنشاء/فحص أوراق البيانات».
-
----
-
-## 🧭 طريقة الاستخدام
-
-1. **الأصناف**: أضف الأصناف (الكود، الاسم، التصنيف، الوحدة، الرصيد الحالي، الحد الأدنى، مكان التخزين).
-   - اختر التصنيف **PCR** لإضافة الصنف إلى قسم PCR المستقل؛ تُخزَّن هذه الأصناف منفصلة عن المخزن العام.
-   - اختر التصنيف **كيماويات** لإضافة مادة إلى قسم الكيماويات المستقل؛ تُخزَّن تلقائيًا في «قسم الكيماويات».
-2. **طلبات المعمل → ➕ إضافة طلبية جديدة**: أدخل تاريخ الوصول، اسم المعمل/القسم، المسؤول، ملاحظات.
-3. من شاشة تفاصيل الطلبية اضغط **➕ إضافة صنف** وأضف الأصناف المطلوبة.
-   - إذا كان الصنف له كمية متبقية في طلبية سابقة سيظهر **تنبيه** برقم الطلبية القديمة وتاريخها وكمياتها.
-4. **تسجيل السحب**: اختر الصنف، الكمية المسحوبة، اسم الساحب، تاريخ السحب (يمكن السحب على دفعات في تواريخ مختلفة).
-   - لسحب مادة كيميائية انتقل إلى **قسم الكيماويات → 📤 سحب مادة**؛ يُخصم الرصيد تلقائيًا ويظهر السجل في تبويب **📜 سجل السحب**.
-   - للأصناف المكتبية انتقل إلى **قسم المكتبية**؛ أدخل الكراتين والوحدات داخل الكرتونة وتاريخ الشراء، ويمكن السحب من تبويب **📤 سحب صنف** مع تحديث تاريخ السحب تلقائيًا.
-   - لمستلزمات الكمبيوتر انتقل إلى **قسم مستلزمات الكمبيوتر**؛ أدخل الكمية ومكان التخزين وتاريخ الشراء والمواصفات أو الأرقام التسلسلية، واختر تصنيف الجهاز **جديد** أو **قديم**.
-   - لسحب مستلزمات الكمبيوتر استخدم تبويب **📤 سحب صنف** داخل القسم؛ يُخصم الرصيد تلقائيًا ويظهر السجل في **📜 سجل السحب**.
-   - لاستمارات الهيئة انتقل إلى **📄 استمارات الهيئة**؛ سجّل الوارد من تبويب **📥 تسجيل وارد** (اسم الصنف، كود الصنف، الكمية المستلمة، تاريخ الاستلام، اسم المستلم)، ثم اختر الصنف وكوده من القائمة المنسدلة في تبويب **📤 تسجيل صرف** وأدخل الكمية وتاريخ السحب واسم المستخدم.
-5. **تكهين الأجهزة**: انتقل إلى **🗑️ تكهين الأجهزة**، واختر المصدر (أجهزة PCR أو مستلزمات الكمبيوتر) والجهاز، ثم أدخل تاريخ التكهين وسببه واسم القائم به واضغط **تأكيد التكهين**؛ تُحدَّث حالة الجهاز إلى **مكهن**.
-6. **حذف صنف**: استخدم تبويب **🗑️ حذف صنف** داخل القسم المطلوب (أو نموذج الحذف في قسم التكهين)، واختر الصنف وحدّد مربع التأكيد ثم اضغط **حذف الصنف**؛ يُحذف من Google Sheets والنسخة المحلية.
-7. عند اكتمال كل الأصناف اضغط **✅ إتمام الطلبية**.
-8. تابع كل الحركات من **حركة المخزن**، والتقارير من صفحة **التقارير**.
-
----
-
-## 📌 قواعد الحساب المطبّقة
-
-- المتبقي في الطلبية = المطلوب − إجمالي المسحوب.
-- رصيد المخزن ينخفض تلقائيًا عند كل سحب.
-- لا يُسمح بسحب كمية أكبر من رصيد المخزن.
-- لا يُسمح بسحب كمية أكبر من المتبقي في الطلبية.
-- عند وصول الرصيد للحد الأدنى أو أقل يظهر تنبيه «المخزون منخفض».
-- يتم حفظ تاريخ ووقت كل عملية سحب واسم الشخص الذي قام بالسحب.
-- كل العمليات محفوظة في Google Sheets ولا تُحذف البيانات القديمة.
+- غيّر `ADMIN_PASSWORD` قبل أول تشغيل في الإنتاج.
+- استخدم HTTPS وفعّل `COOKIE_SECURE=1`.
+- اجعل صلاحيات مجلد `data` محدودة لمستخدم الخدمة فقط.
+- لا تشغّل عدة نسخ من الخادم على نفس قاعدة SQLite.
+- احتفظ بنسخ احتياطية دورية من قاعدة البيانات.
+- راجع المستخدمين والأدوار بانتظام.

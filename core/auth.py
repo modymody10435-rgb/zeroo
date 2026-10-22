@@ -50,11 +50,7 @@ def _check(username: str, password: str):
     if user:
         return user, ""
     # مسار احتياطي لحساب الأسرار المفرد (قبل تفعيل ورقة Users)
-    # مقارنة آمنة حتى بأحرف غير لاتينية (compare_digest يرفض non-ASCII)
-    def _eq_bytes(a: str, b: str) -> bool:
-        return hmac.compare_digest(str(a or "").encode("utf-8"), str(b or "").encode("utf-8"))
-
-    if _eq_bytes(username, cfg.username) and _eq_bytes(password, cfg.password):
+    if hmac.compare_digest(username, cfg.username) and hmac.compare_digest(password, cfg.password):
         return {"username": cfg.username, "role": "admin"}, ""
     # تفسير سبب الرفض
     if google_error:

@@ -37,7 +37,17 @@ from datetime import date, datetime
 
 import pandas as pd
 import streamlit as st
-
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] div[role="radiogroup"] label div p {
+        font-size: 18px !important;
+        font-weight: bold !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 from core import offline
 from core.auth import current_username, is_admin, is_logged_in, login_form, logout
 from core.config import load_config
@@ -277,6 +287,7 @@ PAGES = [
     "🗂️ قسم المكتبية (Office Supplies Section)",
     "💻 قسم مستلزمات الكمبيوتر (Computer Supplies Section)",
     "📄 استمارات الهيئة — الوارد والصرف (Authority Forms)",
+    "🌐 طلبيات منظمة الصحة العالمية (WHO Orders)",
     "🗑️ تكهين الأجهزة (Device Decommissioning)",
     "📊 التقارير والسجلات (Reports & Logs)",
 ]
@@ -3778,7 +3789,405 @@ def page_authority_forms() -> None:
     with tab_delete:
         _render_authority_forms_delete_form()
 
+# --------------------------------------------------------------------------- #
+#              8-ب) صفحة طلبيات منظمة الصحة العالمية (WHO Orders)
+# --------------------------------------------------------------------------- #
+WHO_DATA_PATH = os.path.join("data", "who_orders.csv")
+WHO_COLUMNS = [
+    "serial_no",
+    "item_description",
+    "product_code",
+    "uom",
+    "qty_ordered",
+    "qty_confirmed",
+    "qty_received",
+    "remarks",
+]
 
+
+def _load_who_df() -> pd.DataFrame:
+    os.makedirs("data", exist_ok=True)
+    if os.path.isfile(WHO_DATA_PATH):
+        try:
+            df = pd.read_csv(WHO_DATA_PATH, dtype=str).fillna("")
+            for col in WHO_COLUMNS:
+                if col not in df.columns:
+                    df[col] = ""
+            df["qty_ordered"] = df["qty_ordered"].apply(lambda v: to_number(v, 0.0))
+            df["qty_confirmed"] = df["qty_confirmed"].apply(lambda v: to_number(v, 0.0))
+            df["qty_received"] = df["qty_received"].apply(lambda v: to_number(v, 0.0))
+            return df[WHO_COLUMNS]
+        except Exception:
+            pass
+    return pd.DataFrame(columns=WHO_COLUMNS)
+
+
+def _save_who_df(df: pd.DataFrame) -> None:
+    os.makedirs("data", exist_ok=True)
+    df[WHO_COLUMNS].to_csv(WHO_DATA_PATH, index=False, encoding="utf-8-sig")
+
+
+def _read_uploaded_sheet(uploaded_file) -> pd.DataFrame:
+    name = uploaded_file.name.lower()
+    if name.endswith(".csv"):
+        return pd.read_csv(uploaded_file).fillna("")
+    return pd.read_excel(uploaded_file).fillna("")
+
+
+def _normalize_col_map(columns) -> dict:
+    """يربط أسماء أعمدة شيت الـ WHO القياسية بأسماء الأعمدة البرمجية."""
+    mapping = {}
+    for col in columns:
+        c = str(col).strip().lower()
+        if c in ("s.#.", "s.#", "s#", "no", "م", "مسلسل", "serial_no"):
+            mapping[col] = "serial_no"
+        elif "description" in c or "وصف" in c or "اسم الصنف" in c or c == "item":
+            mapping[col] = "item_description"
+        elif "code" in c or "pn" in c or "cat" in c or "كود" in c:
+            mapping[col] = "product_code"
+        elif "uom" in c or "unit" in c or "وحدة" in c:
+            mapping[col] = "uom"
+        elif "ordered" in c or "مطلوب" in c:
+            mapping[col] = "qty_ordered"
+        elif "confirmed" in c or "approved" in c or "معتمد" in c:
+            mapping[col] = "qty_confirmed"
+        elif "received" in c or "supplied" in c or "delivered" in c or "مستلم" in c or "وارد" in c or "qty" in c or "الكمية" in c:
+            mapping[col] = "qty_received"
+        elif "remark" in c or "note" in c or "ملاحظ" in c:
+            mapping[col] = "remarks"
+    return mapping
+
+
+def page_who_orders() -> None:
+    header(
+        "🌐 طلبيات منظمة الصحة العالمية (WHO Orders)",
+        "إدارة الطلبيات المرسلة، ردود المنظمة، تفريغ شيتات التوريد، ومطابقة النواقص آليًا",
+    )
+
+    df = _load_who_df()
+
+    tab1, tab2, tab3, tab4 = st.tabs(
+        [
+            "1️⃣ الطلبية المرسلة (Sent Order)",
+            "2️⃣ رد وتأكيد المنظمة (WHO Confirmation)",
+            "3️⃣ استلام الشحنة برفع Excel",
+            "4️⃣ مطابقة المستلم والنواقص",
+        ]
+    )
+
+    # ---------------- المرحلة 1: الطلبية المرسلة ---------------- #
+    with tab1:
+        st.markdown("#### 📤 تسجيل أو استيراد طلبية مرسلة إلى WHO")
+        with st.expander("📥 استيراد الطلبية المرسلة من ملف Excel / CSV", expanded=False):
+            up_order = st.file_uploader(
+                "ارفع ملف الطلبية (يحتوي على Item Description, Product Code/PN/Cat#, UOM, Quantity Ordered, Remarks)",
+                type=["xlsx", "xls", "csv"],
+                key="who_upload_order",
+            )
+            if up_order is not None and st.button(
+                "📥 تحميل بنود الطلبية من الملف", type="primary", use_container_width=True
+            ):
+                try:
+                    raw = _read_uploaded_sheet(up_order)
+                    col_map = _normalize_col_map(raw.columns)
+                    imported_rows = []
+                    for idx, r in raw.iterrows():
+                        mapped = { col_map[k]: r[k] for k in raw.columns if k in col_map }
+                        desc = str(mapped.get("item_description", "")).strip()
+                        code = str(mapped.get("product_code", "")).strip()
+                        if not desc and not code:
+                            continue
+                        qty_ord = to_number(mapped.get("qty_ordered", mapped.get("qty_received", 0)), 0.0)
+                        imported_rows.append(
+                            {
+                                "serial_no": str(mapped.get("serial_no", idx + 1)).strip(),
+                                "item_description": desc,
+                                "product_code": code,
+                                "uom": str(mapped.get("uom", "")).strip(),
+                                "qty_ordered": qty_ord,
+                                "qty_confirmed": qty_ord,
+                                "qty_received": 0.0,
+                                "remarks": str(mapped.get("remarks", "")).strip(),
+                            }
+                        )
+                    if imported_rows:
+                        df = pd.concat([df, pd.DataFrame(imported_rows)], ignore_index=True)
+                        _save_who_df(df)
+                        st.success(f"تم استيراد {len(imported_rows)} بندًا بنجاح.")
+                        st.rerun()
+                    else:
+                        st.warning("لم يتم العثور على أعمدة مطابقة في الملف المرفوع.")
+                except Exception as exc:
+                    st.error(f"تعذر قراءة الملف: {exc}")
+
+        with st.form("who_add_item_form", clear_on_submit=True):
+            st.markdown("##### ➕ إضافة بند يدويًا للطلبية")
+            c1, c2, c3 = st.columns([3, 2, 1])
+            with c1:
+                desc_v = st.text_input("وصف الصنف (Item Description) *")
+            with c2:
+                code_v = st.text_input("كود الصنف (Product Code/PN/Cat#)")
+            with c3:
+                uom_v = st.text_input("الوحدة (UOM)", placeholder="Pack / Case / Each")
+            c4, c5 = st.columns([1, 3])
+            with c4:
+                qty_v = st.number_input("الكمية المطلوبة (Quantity Ordered) *", min_value=0.0, step=1.0, value=None)
+            with c5:
+                rem_v = st.text_input("ملاحظات واشتراطات الصلاحية (Remarks)")
+            sub_add = st.form_submit_button("➕ إضافة البند للطلبية", type="primary", use_container_width=True)
+
+        if sub_add:
+            if not str(desc_v).strip():
+                st.error("وصف الصنف مطلوب.")
+            elif to_number(qty_v, 0.0) <= 0:
+                st.error("أدخل كمية مطلوبة أكبر من صفر.")
+            else:
+                q_num = to_number(qty_v, 0.0)
+                new_row = {
+                    "serial_no": str(len(df) + 1),
+                    "item_description": str(desc_v).strip(),
+                    "product_code": str(code_v).strip(),
+                    "uom": str(uom_v).strip(),
+                    "qty_ordered": q_num,
+                    "qty_confirmed": q_num,
+                    "qty_received": 0.0,
+                    "remarks": str(rem_v).strip(),
+                }
+                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                _save_who_df(df)
+                st.success("تمت إضافة البند إلى الطلبية المرسلة.")
+                st.rerun()
+
+        st.markdown("##### 📋 جدول الطلبية المرسلة")
+        if df.empty:
+            st.info("لا توجد بنود مسجلة في الطلبية بعد.")
+        else:
+            st.dataframe(
+                df[["serial_no", "item_description", "product_code", "uom", "qty_ordered", "remarks"]].rename(
+                    columns={
+                        "serial_no": "S.#.",
+                        "item_description": "Item Description",
+                        "product_code": "Product Code/PN/Cat#",
+                        "uom": "UOM",
+                        "qty_ordered": "Quantity Ordered",
+                        "remarks": "Remarks",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            if st.button("🗑️ مسح جميع بنود الطلبية الحالية", use_container_width=True):
+                _save_who_df(pd.DataFrame(columns=WHO_COLUMNS))
+                st.rerun()
+
+    # ---------------- المرحلة 2: رد وتأكيد WHO ---------------- #
+    with tab2:
+        st.markdown("#### ✅ رد منظمة الصحة العالمية وتحديث الكميات المعتمدة")
+        if df.empty:
+            st.info("أضف أو ارفع طلبية في المرحلة الأولى أولاً.")
+        else:
+            st.caption("يمكنك تعديل عمود «الكمية المعتمدة من WHO» وملاحظات المنظمة مباشرة ثم الضغط على حفظ:")
+            edited_conf = st.data_editor(
+                df[["serial_no", "item_description", "product_code", "uom", "qty_ordered", "qty_confirmed", "remarks"]].rename(
+                    columns={
+                        "serial_no": "S.#.",
+                        "item_description": "Item Description",
+                        "product_code": "Product Code/PN/Cat#",
+                        "uom": "UOM",
+                        "qty_ordered": "الكمية المطلوبة",
+                        "qty_confirmed": "الكمية المعتمدة من WHO",
+                        "remarks": "Remarks",
+                    }
+                ),
+                disabled=["S.#.", "Item Description", "Product Code/PN/Cat#", "UOM", "الكمية المطلوبة"],
+                use_container_width=True,
+                hide_index=True,
+                key="who_confirm_editor",
+            )
+            if st.button("💾 حفظ تأكيد المنظمة", type="primary", use_container_width=True):
+                df["qty_confirmed"] = edited_conf["الكمية المعتمدة من WHO"].apply(lambda v: to_number(v, 0.0))
+                df["remarks"] = edited_conf["Remarks"].astype(str)
+                _save_who_df(df)
+                st.success("تم حفظ الكميات المعتمدة من WHO.")
+                st.rerun()
+
+    # ---------------- المرحلة 3: استلام الشحنة برفع Excel ---------------- #
+    with tab3:
+        st.markdown("#### 📦 استلام الشحنة وتفريغ شيت الوارد آليًا (Excel / CSV)")
+        if df.empty:
+            st.info("لا توجد طلبية مسجلة لمطابقتها. سجّل الطلبية في المرحلة الأولى أولاً.")
+        else:
+            st.caption(
+                "ارفع شيت التوريد الوارد مع الشحنة (`.xlsx` أو `.csv`) ليقوم النظام تلقائيًا بمطابقة الكود أو اسم الصنف وتحديث الكميات المستلمة."
+            )
+            up_ship = st.file_uploader(
+                "📂 اختر ملف شيت الاستلام (Excel / CSV)",
+                type=["xlsx", "xls", "csv"],
+                key="who_upload_shipment",
+            )
+            mode = st.radio(
+                "طريقة تحديث الكميات المستلمة:",
+                ["إضافة على المستلم السابق (توريد على دفعات)", "استبدال الكمية المستلمة بالقيمة الجديدة"],
+                horizontal=True,
+            )
+            if up_ship is not None and st.button(
+                "⚡ تحليل الشيت ومطابقة الشحنة تلقائيًا", type="primary", use_container_width=True
+            ):
+                try:
+                    ship_df = _read_uploaded_sheet(up_ship)
+                    col_map = _normalize_col_map(ship_df.columns)
+                    matched_count = 0
+                    for _, srow in ship_df.iterrows():
+                        mapped = { col_map[k]: srow[k] for k in ship_df.columns if k in col_map }
+                        scode = str(mapped.get("product_code", "")).strip().lower()
+                        sdesc = str(mapped.get("item_description", "")).strip().lower()
+                        sqty = to_number(
+                            mapped.get("qty_received", mapped.get("qty_ordered", 0)), 0.0
+                        )
+                        if sqty <= 0 and not scode and not sdesc:
+                            continue
+
+                        mask = pd.Series([False] * len(df))
+                        if scode:
+                            mask = df["product_code"].astype(str).str.strip().str.lower() == scode
+                        if not mask.any() and sdesc:
+                            mask = df["item_description"].astype(str).str.strip().str.lower() == sdesc
+
+                        if mask.any():
+                            matched_count += int(mask.sum())
+                            if mode.startswith("إضافة"):
+                                df.loc[mask, "qty_received"] = df.loc[mask, "qty_received"].apply(to_number) + sqty
+                            else:
+                                df.loc[mask, "qty_received"] = sqty
+                    _save_who_df(df)
+                    st.success(f"تمت مطابقة وتحديث {matched_count} بندًا من ملف الشحنة بنجاح!")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"حدث خطأ أثناء معالجة ملف الإكسل: {exc}")
+
+            st.markdown("##### ✏️ أو تعديل الكميات المستلمة يدويًا")
+            edited_rec = st.data_editor(
+                df[["serial_no", "item_description", "product_code", "uom", "qty_confirmed", "qty_received"]].rename(
+                    columns={
+                        "serial_no": "S.#.",
+                        "item_description": "Item Description",
+                        "product_code": "Product Code/PN/Cat#",
+                        "uom": "UOM",
+                        "qty_confirmed": "الكمية المعتمدة",
+                        "qty_received": "الكمية المستلمة فعليًا",
+                    }
+                ),
+                disabled=["S.#.", "Item Description", "Product Code/PN/Cat#", "UOM", "الكمية المعتمدة"],
+                use_container_width=True,
+                hide_index=True,
+                key="who_receive_editor",
+            )
+            if st.button("💾 حفظ الكميات المستلمة", use_container_width=True):
+                df["qty_received"] = edited_rec["الكمية المستلمة فعليًا"].apply(lambda v: to_number(v, 0.0))
+                _save_who_df(df)
+                st.success("تم تحديث الكميات المستلمة.")
+                st.rerun()
+
+    # ---------------- المرحلة 4: مطابقة المستلم والنواقص ---------------- #
+    with tab4:
+        st.markdown("#### 📊 لوحة مطابقة الشحنة وتتبع النواقص (Reconciliation Dashboard)")
+        if df.empty:
+            st.info("لا توجد بيانات لعرض المطابقة.")
+        else:
+            rec_df = df.copy()
+            rec_df["target_qty"] = rec_df.apply(
+                lambda r: to_number(r["qty_confirmed"]) if to_number(r["qty_confirmed"]) > 0 else to_number(r["qty_ordered"]),
+                axis=1,
+            )
+            rec_df["shortage"] = (rec_df["target_qty"] - rec_df["qty_received"]).clip(lower=0.0)
+
+            def _status_label(row) -> str:
+                rec = to_number(row["qty_received"])
+                tgt = to_number(row["target_qty"])
+                if tgt <= 0:
+                    return "—"
+                if rec >= tgt:
+                    return "✅ مكتمل (Fully Received)"
+                if rec > 0:
+                    return "🟠 استلام جزئي / عجز (Partial)"
+                return "🔴 لم يصل (Pending / Missing)"
+
+            rec_df["status"] = rec_df.apply(_status_label, axis=1)
+
+            total_items = len(rec_df)
+            full_count = int((rec_df["status"].str.startswith("✅")).sum())
+            partial_count = int((rec_df["status"].str.startswith("🟠")).sum())
+            missing_count = int((rec_df["status"].str.startswith("🔴")).sum())
+
+            m1, m2, m3, m4 = st.columns(4)
+            with m1:
+                st.metric("إجمالي البنود", total_items, width="stretch")
+            with m2:
+                st.metric("✅ مكتمل بالكامل", full_count, width="stretch")
+            with m3:
+                st.metric("🟠 عجز جزئي", partial_count, width="stretch")
+            with m4:
+                st.metric("🔴 لم يصل", missing_count, width="stretch")
+
+            filter_status = st.radio(
+                "تصفية العرض:",
+                ["الكل", "النواقص فقط (عجز جزئي + لم يصل)", "المكتمل فقط"],
+                horizontal=True,
+            )
+            view_df = rec_df
+            if filter_status == "النواقص فقط (عجز جزئي + لم يصل)":
+                view_df = rec_df[rec_df["shortage"] > 0]
+            elif filter_status == "المكتمل فقط":
+                view_df = rec_df[rec_df["shortage"] <= 0]
+
+            display_df = view_df[
+                [
+                    "serial_no",
+                    "item_description",
+                    "product_code",
+                    "uom",
+                    "qty_ordered",
+                    "qty_confirmed",
+                    "qty_received",
+                    "shortage",
+                    "status",
+                    "remarks",
+                ]
+            ].rename(
+                columns={
+                    "serial_no": "S.#.",
+                    "item_description": "Item Description",
+                    "product_code": "Product Code/PN/Cat#",
+                    "uom": "UOM",
+                    "qty_ordered": "المطلوب",
+                    "qty_confirmed": "المعتمد",
+                    "qty_received": "المستلم",
+                    "shortage": "العجز / المتبقي",
+                    "status": "حالة التوريد",
+                    "remarks": "Remarks",
+                }
+            )
+
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+            shortage_only = display_df[display_df["العجز / المتبقي"] > 0]
+            c_dl1, c_dl2 = st.columns(2)
+            with c_dl1:
+                st.download_button(
+                    "⬇️ تصدير تقرير النواقص فقط (CSV)",
+                    data=shortage_only.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="who_shortage_report.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+            with c_dl2:
+                st.download_button(
+                    "⬇️ تصدير جدول المطابقة الكامل (CSV)",
+                    data=display_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="who_full_reconciliation.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
 # --------------------------------------------------------------------------- #
 #                    9) صفحة تكهين الأجهزة
 # --------------------------------------------------------------------------- #
@@ -4327,13 +4736,9 @@ def page_users() -> None:
 def main() -> None:
     cfg = load_config()
     try:
-        offline.init_db()          # تهيئة القاعدة المحلية (إنشاء الجداول) فورًا
-    except Exception as exc:  # noqa: BLE001
-        st.session_state["_db_error"] = f"تعذر تهيئة قاعدة البيانات المحلية: {exc}"
-    try:
-        offline.configure(cfg)      # يلتقط بيانات المزامنة للخيط الخلفي
-        offline.ensure_worker()     # خيط مزامنة تلقائي: يدفع الطابور ويسحب البيانات في الخلفية
-        offline.flush_if_pending()  # دفعة فورية عند فتح التطبيق (سريعة)
+        offline.configure(cfg)
+        offline.ensure_worker()
+        offline.flush_if_pending()
     except Exception as exc:  # noqa: BLE001
         st.session_state["_db_error"] = f"تعذر تجهيز نظام المزامنة المحلية: {exc}"
     try:
@@ -4368,6 +4773,8 @@ def main() -> None:
     elif page == PAGES[7]:
         page_authority_forms()
     elif page == PAGES[8]:
+        page_who_orders()
+    elif page == PAGES[9]:
         page_decommission()
     elif page == ADMIN_PAGES[0]:
         page_users()
