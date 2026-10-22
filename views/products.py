@@ -7,12 +7,19 @@ import streamlit as st
 
 from core.gsheets import to_number
 from core.services import (
+    DEVICE_STATUSES,
+    DEVICE_STATUS_DEFAULT,
+    PRODUCT_CATEGORIES,
+    PRODUCT_CATEGORY_GENERAL,
+    PRODUCT_CATEGORY_PCR,
+    PCR_STORAGE_SECTION,
     add_product,
     delete_product,
     find_product,
     get_order_items,
     get_products,
     get_withdrawals,
+    normalize_category,
     update_product,
 )
 from core.styles import alert, header
@@ -20,6 +27,9 @@ from core.styles import alert, header
 
 def _products_table(df):
     view = df.copy()
+    if "category" not in view.columns:
+        view["category"] = PRODUCT_CATEGORY_GENERAL
+    view["category"] = view["category"].apply(normalize_category)
     view["الرصيد"] = view["current_stock"].apply(to_number)
     view["حالة"] = view.apply(
         lambda r: "منخفض" if to_number(r["current_stock"]) <= to_number(r["min_stock"]) else "جيد",
@@ -29,6 +39,7 @@ def _products_table(df):
         [
             "product_code",
             "product_name",
+            "category",
             "unit",
             "الرصيد",
             "min_stock",
@@ -36,18 +47,23 @@ def _products_table(df):
             "manufacturer",
             "supplier",
             "expiry_date",
+            "serial_number",
+            "device_status",
             "حالة",
         ]
     ].rename(
         columns={
             "product_code": "الكود",
             "product_name": "اسم الصنف",
+            "category": "التصنيف",
             "unit": "الوحدة",
             "min_stock": "الحد الأدنى",
             "storage_location": "مكان التخزين",
             "manufacturer": "شركة الصنع",
             "supplier": "شركة التوريد",
             "expiry_date": "تاريخ الانتهاء",
+            "serial_number": "الرقم التسلسلي",
+            "device_status": "حالة الجهاز",
         }
     )
 
@@ -81,6 +97,18 @@ def _render_add_form() -> None:
             min_stock = st.number_input("الحد الأدنى", min_value=0.0, step=1.0, value=None, placeholder="")
             location = st.text_input("مكان التخزين")
             supplier = st.text_input("شركة التوريد / المرسل", placeholder="")
+        category = st.selectbox("التصنيف / قسم المخزن", options=PRODUCT_CATEGORIES)
+        serial_number = ""
+        device_status = ""
+        if category == PRODUCT_CATEGORY_PCR:
+            st.caption(f"أصناف PCR تُخزَّن تلقائيًا في «{PCR_STORAGE_SECTION}» عند ترك مكان التخزين فارغًا.")
+            c3, c4 = st.columns(2)
+            with c3:
+                serial_number = st.text_input("الرقم التسلسلي للجهاز")
+            with c4:
+                device_status = st.selectbox(
+                    "حالة الجهاز", options=DEVICE_STATUSES, index=0
+                )
         expiry_date = st.date_input("تاريخ الانتهاء", value=None)
         notes = st.text_area("ملاحظات", height=70)
         submitted = st.form_submit_button("حفظ الصنف", type="primary", use_container_width=True)
@@ -98,6 +126,9 @@ def _render_add_form() -> None:
                 "manufacturer": manufacturer,
                 "supplier": supplier,
                 "expiry_date": expiry_date.strftime("%Y-%m-%d") if expiry_date else "",
+                "category": category,
+                "serial_number": serial_number,
+                "device_status": device_status,
             }
         )
         if ok:
@@ -134,6 +165,16 @@ def _render_list() -> None:
         df = df[df["supplier"].astype(str).str.contains(sup_search, case=False, na=False)]
     if exp_search:
         df = df[df["expiry_date"].astype(str).str.contains(exp_search, case=False, na=False)]
+
+    category_filter = st.selectbox(
+        "🗂️ التصنيف / قسم المخزن",
+        options=["الكل"] + PRODUCT_CATEGORIES,
+        key="list_category_filter",
+    )
+    if category_filter != "الكل":
+        df = df[
+            df["category"].apply(normalize_category).str.upper() == category_filter.upper()
+        ]
 
     st.caption(f"عدد الأصناف: {len(df)}")
     st.dataframe(_products_table(df), use_container_width=True, hide_index=True)
@@ -237,6 +278,33 @@ def _render_edit() -> None:
             min_stock = st.number_input(
                 "الحد الأدنى", min_value=0.0, step=1.0, value=to_number(product.get("min_stock"))
             )
+        cur_category = normalize_category(product.get("category"))
+        category_options = list(PRODUCT_CATEGORIES)
+        if cur_category not in category_options:
+            category_options.append(cur_category)
+        category = st.selectbox(
+            "التصنيف / قسم المخزن",
+            options=category_options,
+            index=category_options.index(cur_category),
+        )
+        cur_serial = str(product.get("serial_number", "") or "").strip()
+        cur_status = str(product.get("device_status", "") or "").strip()
+        serial_number = cur_serial
+        device_status = cur_status
+        if category == PRODUCT_CATEGORY_PCR:
+            status_options = list(DEVICE_STATUSES)
+            status_value = cur_status or DEVICE_STATUS_DEFAULT
+            if status_value not in status_options:
+                status_options.append(status_value)
+            c3, c4 = st.columns(2)
+            with c3:
+                serial_number = st.text_input("الرقم التسلسلي للجهاز", value=cur_serial)
+            with c4:
+                device_status = st.selectbox(
+                    "حالة الجهاز",
+                    options=status_options,
+                    index=status_options.index(status_value),
+                )
         notes = st.text_area("ملاحظات", value=str(product.get("notes", "")), height=70)
         submitted = st.form_submit_button("حفظ التعديلات", type="primary", use_container_width=True)
 
@@ -250,6 +318,9 @@ def _render_edit() -> None:
                 "current_stock": current_stock,
                 "min_stock": min_stock,
                 "notes": notes,
+                "category": category,
+                "serial_number": serial_number,
+                "device_status": device_status,
             },
         )
         if ok:

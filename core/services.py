@@ -23,6 +23,88 @@ from core.gsheets import (
 )
 
 
+PRODUCT_CATEGORY_GENERAL = "عام"
+PRODUCT_CATEGORY_PCR = "PCR"
+PRODUCT_CATEGORY_CHEMICALS = "كيماويات"
+PRODUCT_CATEGORY_OFFICE = "المكتبية"
+PRODUCT_CATEGORY_COMPUTER = "مستلزمات الكمبيوتر"
+PRODUCT_CATEGORIES = [
+    PRODUCT_CATEGORY_GENERAL,
+    PRODUCT_CATEGORY_PCR,
+    PRODUCT_CATEGORY_CHEMICALS,
+    PRODUCT_CATEGORY_OFFICE,
+    PRODUCT_CATEGORY_COMPUTER,
+]
+PCR_STORAGE_SECTION = "قسم PCR"
+CHEMICALS_STORAGE_SECTION = "قسم الكيماويات"
+OFFICE_STORAGE_SECTION = "قسم المكتبية"
+COMPUTER_STORAGE_SECTION = "قسم مستلزمات الكمبيوتر"
+DEVICE_CONDITIONS = ["جديد", "قديم"]
+DEVICE_CONDITION_DEFAULT = DEVICE_CONDITIONS[0]
+AUTHORITY_FORMS_SETTING = "authority_forms_stock"
+AUTHORITY_FORMS_CODE = "AUTHORITY_FORMS"
+AUTHORITY_FORMS_NAME = "استمارات الهيئة"
+AUTHORITY_FORMS_RECEIPT_TYPE = "وارد استمارات الهيئة"
+AUTHORITY_FORMS_WITHDRAWAL_TYPE = "صرف استمارات الهيئة"
+AUTHORITY_FORMS_WITHDRAWAL_TYPE_LEGACY = "سحب استمارات الهيئة"
+DEVICE_STATUSES = [
+    "جاهز",
+    "قيد الاستخدام",
+    "تحت الصيانة",
+    "معطل",
+    "تالف",
+    "خارج الخدمة",
+    "مكهن",
+]
+DEVICE_STATUS_DEFAULT = DEVICE_STATUSES[0]
+DEVICE_STATUS_DECOMMISSIONED = "مكهن"
+
+
+def normalize_category(value: Any) -> str:
+    """يوحّد تصنيف الصنف: فارغ = عام، وقيمة PCR بأي حالة أحرف = PCR."""
+    text = str(value or "").strip()
+    if not text:
+        return PRODUCT_CATEGORY_GENERAL
+    if text.upper() == PRODUCT_CATEGORY_PCR:
+        return PRODUCT_CATEGORY_PCR
+    if text.lower() in ("chemicals", "chemical", PRODUCT_CATEGORY_CHEMICALS):
+        return PRODUCT_CATEGORY_CHEMICALS
+    if text.lower() in (
+        "office",
+        "stationery",
+        "office supplies",
+        PRODUCT_CATEGORY_OFFICE,
+        "مكتبية",
+        "المكتبات",
+    ):
+        return PRODUCT_CATEGORY_OFFICE
+    if text.lower() in (
+        "computer",
+        "computers",
+        "it",
+        "computer supplies",
+        PRODUCT_CATEGORY_COMPUTER,
+        "كمبيوتر",
+        "حاسوب",
+    ):
+        return PRODUCT_CATEGORY_COMPUTER
+    return text
+
+
+def is_pcr_category(value: Any) -> bool:
+    return normalize_category(value).upper() == PRODUCT_CATEGORY_PCR
+
+
+def normalize_device_status(value: Any, default: str = "") -> str:
+    text = str(value or "").strip()
+    return text or default
+
+
+def normalize_device_condition(value: Any, default: str = "") -> str:
+    text = str(value or "").strip()
+    return text or default
+
+
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -78,6 +160,276 @@ def set_setting(key: str, value: str) -> None:
         append_row(_key(), SHEETS["settings"], {"key": key, "value": value})
 
 
+def get_authority_forms_count() -> float:
+    """العدد الحالي المتاح من استمارات الهيئة."""
+    return to_number(get_settings().get(AUTHORITY_FORMS_SETTING, "0"))
+
+
+def receive_authority_forms(
+    item_name: str,
+    qty: float,
+    receipt_date: str = "",
+    receiver: str = "",
+    item_code: str = "",
+    notes: str = "",
+) -> Tuple[bool, str]:
+    """تسجيل كمية واردة من استمارات الهيئة وزيادة العدد المتاح تلقائيًا."""
+    item_name = str(item_name or "").strip()
+    if not item_name:
+        return False, "اسم الصنف مطلوب."
+    qty = to_number(qty, -1)
+    if qty <= 0:
+        return False, "الكمية المستلمة يجب أن تكون أكبر من صفر."
+    receiver = str(receiver or "").strip()
+    if not receiver:
+        return False, "اسم المستلم مطلوب."
+
+    current = get_authority_forms_count()
+    new_qty = current + qty
+    set_setting(AUTHORITY_FORMS_SETTING, f"{new_qty:g}")
+    stamp = normalize_timestamp(receipt_date)
+    record_movement(
+        order_no="",
+        product_code=str(item_code or "").strip() or AUTHORITY_FORMS_CODE,
+        product_name=item_name,
+        qty=qty,
+        balance_after=new_qty,
+        person=receiver,
+        movement_type=AUTHORITY_FORMS_RECEIPT_TYPE,
+        movement_date=stamp,
+        notes=str(notes or "").strip(),
+    )
+    return (
+        True,
+        f"تم تسجيل استلام {qty:g} من «{item_name}». العدد المتاح: {new_qty:g}.",
+    )
+
+
+def withdraw_authority_forms(
+    item_name: str,
+    item_code: str,
+    qty: float,
+    username: str,
+    withdrawal_date: str = "",
+    notes: str = "",
+) -> Tuple[bool, str]:
+    """تسجيل كمية مصروفة من صنف استمارات الهيئة وخصمها من المخزون."""
+    item_name = str(item_name or "").strip()
+    if not item_name:
+        return False, "اسم الصنف مطلوب."
+    item_code = str(item_code or "").strip()
+    if not item_code:
+        return False, "كود الصنف مطلوب."
+    qty = to_number(qty, -1)
+    if qty <= 0:
+        return False, "الكمية المصروفة يجب أن تكون أكبر من صفر."
+    username = str(username or "").strip()
+    if not username:
+        return False, "اسم المستخدم القائم بالصرف مطلوب."
+
+    items = get_authority_form_items()
+    matched = items[
+        (items["item_name"].astype(str) == item_name)
+        & (items["item_code"].astype(str) == item_code)
+    ]
+    if matched.empty:
+        return False, "الصنف المحدد أو كوده غير متاح في المخزون."
+    available = to_number(matched.iloc[0].get("available_qty"))
+    if qty > available + 1e-9:
+        return False, f"الكمية المصروفة أكبر من المتاح من الصنف ({available:g})."
+
+    current = get_authority_forms_count()
+    if qty > current + 1e-9:
+        return False, f"الكمية المصروفة أكبر من العدد المتاح ({current:g})."
+    new_qty = current - qty
+    set_setting(AUTHORITY_FORMS_SETTING, f"{new_qty:g}")
+    stamp = normalize_timestamp(withdrawal_date)
+    record_movement(
+        order_no="",
+        product_code=item_code,
+        product_name=item_name,
+        qty=qty,
+        balance_after=new_qty,
+        person=username,
+        movement_type=AUTHORITY_FORMS_WITHDRAWAL_TYPE,
+        movement_date=stamp,
+        notes=str(notes or "").strip(),
+    )
+    return (
+        True,
+        f"تم صرف {qty:g} من «{item_name}». العدد المتبقي: {new_qty:g}.",
+    )
+
+
+def get_authority_form_receipts() -> pd.DataFrame:
+    """سجل الكميات الواردة من الهيئة."""
+    movements = get_movements()
+    if movements.empty:
+        return movements
+    mask = movements["movement_type"].apply(
+        lambda value: str(value or "").strip() == AUTHORITY_FORMS_RECEIPT_TYPE
+    )
+    return movements[mask].copy()
+
+
+def get_authority_form_withdrawals() -> pd.DataFrame:
+    """سجل الكميات المصروفة من استمارات الهيئة، بما يشمل السجلات القديمة."""
+    movements = get_movements()
+    if movements.empty:
+        return movements
+    allowed = {
+        AUTHORITY_FORMS_WITHDRAWAL_TYPE,
+        AUTHORITY_FORMS_WITHDRAWAL_TYPE_LEGACY,
+    }
+    mask = movements["movement_type"].apply(
+        lambda value: str(value or "").strip() in allowed
+    )
+    return movements[mask].copy()
+
+
+def get_authority_form_items() -> pd.DataFrame:
+    """أصناف استمارات الهيئة المتاحة مع أكوادها وأرصدة الوارد والصرف."""
+    columns = [
+        "item_name",
+        "item_code",
+        "received_qty",
+        "withdrawn_qty",
+        "available_qty",
+    ]
+    receipts = get_authority_form_receipts()
+    if receipts.empty:
+        current = get_authority_forms_count()
+        if current <= 0:
+            return pd.DataFrame(columns=columns)
+        return pd.DataFrame(
+            [
+                {
+                    "item_name": AUTHORITY_FORMS_NAME,
+                    "item_code": AUTHORITY_FORMS_CODE,
+                    "received_qty": current,
+                    "withdrawn_qty": 0.0,
+                    "available_qty": current,
+                }
+            ],
+            columns=columns,
+        )
+
+    received = receipts.copy()
+    received["item_name"] = received["product_name"].fillna("").astype(str).str.strip()
+    received["item_code"] = (
+        received["product_code"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .replace("", AUTHORITY_FORMS_CODE)
+    )
+    received["qty"] = received["qty"].apply(to_number)
+    received = received[received["item_name"] != ""]
+    grouped = (
+        received.groupby(["item_name", "item_code"], as_index=False)["qty"]
+        .sum()
+        .rename(columns={"qty": "received_qty"})
+    )
+
+    withdrawals = get_authority_form_withdrawals()
+    if withdrawals.empty:
+        grouped["withdrawn_qty"] = 0.0
+    else:
+        issued = withdrawals.copy()
+        issued["item_name"] = issued["product_name"].fillna("").astype(str).str.strip()
+        issued["item_code"] = (
+            issued["product_code"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .replace("", AUTHORITY_FORMS_CODE)
+        )
+        issued["qty"] = issued["qty"].apply(to_number)
+        issued = issued[issued["item_name"] != ""]
+        issued = (
+            issued.groupby(["item_name", "item_code"], as_index=False)["qty"]
+            .sum()
+            .rename(columns={"qty": "withdrawn_qty"})
+        )
+        grouped = grouped.merge(
+            issued, on=["item_name", "item_code"], how="left"
+        )
+        grouped["withdrawn_qty"] = grouped["withdrawn_qty"].fillna(0.0)
+
+    grouped["available_qty"] = (
+        grouped["received_qty"] - grouped["withdrawn_qty"]
+    ).clip(lower=0.0)
+    return grouped[columns]
+
+
+def delete_authority_form_item(
+    item_name: str, item_code: str
+) -> Tuple[bool, str]:
+    """حذف صنف استمارات الهيئة وسجلات وارداته وصرفه من Google Sheets."""
+    item_name = str(item_name or "").strip()
+    item_code = str(item_code or "").strip() or AUTHORITY_FORMS_CODE
+    if not item_name:
+        return False, "اسم الصنف مطلوب."
+
+    def matches(frame: pd.DataFrame) -> pd.DataFrame:
+        if frame.empty:
+            return frame
+        names = frame["product_name"].fillna("").astype(str).str.strip()
+        codes = (
+            frame["product_code"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .replace("", AUTHORITY_FORMS_CODE)
+        )
+        return frame[(names == item_name) & (codes == item_code)].copy()
+
+    receipts = matches(get_authority_form_receipts())
+    if receipts.empty:
+        return False, "لم يتم العثور على واردات مسجلة لهذا الصنف."
+    withdrawals = matches(get_authority_form_withdrawals())
+    received_qty = sum(receipts["qty"].apply(to_number))
+    withdrawn_qty = (
+        sum(withdrawals["qty"].apply(to_number)) if not withdrawals.empty else 0.0
+    )
+    net_qty = max(received_qty - withdrawn_qty, 0.0)
+
+    records = pd.concat([receipts, withdrawals], ignore_index=True)
+    movement_nos = [
+        str(value).strip()
+        for value in records.get("movement_no", pd.Series(dtype=str)).tolist()
+        if str(value).strip().lower() not in ("", "nan", "none")
+    ]
+    if not movement_nos:
+        return False, "تعذر تحديد سجلات الحركة المرتبطة بالصنف."
+
+    failed = 0
+    for movement_no in dict.fromkeys(movement_nos):
+        try:
+            if not delete_row(
+                _key(), SHEETS["stock_movements"], "movement_no", movement_no
+            ):
+                failed += 1
+        except Exception:  # noqa: BLE001
+            failed += 1
+    invalidate_cache()
+
+    if failed:
+        return (
+            False,
+            f"تعذر حذف {failed} سجل حركة من Google Sheets. لم يتم تعديل رصيد الاستمارات؛ أعد المحاولة.",
+        )
+
+    current = get_authority_forms_count()
+    deduction = min(net_qty, max(current, 0.0))
+    set_setting(AUTHORITY_FORMS_SETTING, f"{current - deduction:g}")
+    return (
+        True,
+        f"تم حذف صنف «{item_name}» ({item_code}) وسجلاته من Google Sheets، "
+        f"وخُصم {deduction:g} من رصيد استمارات الهيئة.",
+    )
+
+
 def _next_sequence(prefix_key: str, sheet: str) -> int:
     settings = get_settings()
     seq = int(to_number(settings.get(prefix_key, "0")))
@@ -110,6 +462,32 @@ def get_products() -> pd.DataFrame:
     return read_sheet(_key(), SHEETS["products"])
 
 
+def products_by_category(category: str) -> pd.DataFrame:
+    """أصناف تصنيف معيّن (قسم المخزن) — فارغ إذا لم توجد."""
+    products = get_products()
+    if products.empty:
+        return products
+    target = normalize_category(category).upper()
+    mask = products["category"].apply(lambda value: normalize_category(value).upper() == target)
+    return products[mask].copy()
+
+
+def get_pcr_products() -> pd.DataFrame:
+    return products_by_category(PRODUCT_CATEGORY_PCR)
+
+
+def get_chemical_products() -> pd.DataFrame:
+    return products_by_category(PRODUCT_CATEGORY_CHEMICALS)
+
+
+def get_office_products() -> pd.DataFrame:
+    return products_by_category(PRODUCT_CATEGORY_OFFICE)
+
+
+def get_computer_products() -> pd.DataFrame:
+    return products_by_category(PRODUCT_CATEGORY_COMPUTER)
+
+
 def find_product(product_code: str) -> Optional[Dict[str, Any]]:
     df = get_products()
     if df.empty:
@@ -134,13 +512,28 @@ def add_product(data: Dict[str, Any]) -> Tuple[bool, str]:
         return False, f"كود الصنف {code} موجود مسبقًا."
     start_qty = to_number(data.get("current_stock", 0))
     date_added = str(data.get("date_added", "")).strip() or now_str()
+    category = normalize_category(data.get("category"))
+    location = str(data.get("storage_location", "")).strip()
+    if not location:
+        if category == PRODUCT_CATEGORY_PCR:
+            location = PCR_STORAGE_SECTION
+        elif category == PRODUCT_CATEGORY_CHEMICALS:
+            location = CHEMICALS_STORAGE_SECTION
+        elif category == PRODUCT_CATEGORY_OFFICE:
+            location = OFFICE_STORAGE_SECTION
+        elif category == PRODUCT_CATEGORY_COMPUTER:
+            location = COMPUTER_STORAGE_SECTION
+    device_status = normalize_device_status(
+        data.get("device_status"),
+        DEVICE_STATUS_DEFAULT if category == PRODUCT_CATEGORY_PCR else "",
+    )
     row = {
         "product_code": code,
         "product_name": name,
         "unit": str(data.get("unit", "")).strip(),
         "current_stock": start_qty,
         "min_stock": to_number(data.get("min_stock", 0)),
-        "storage_location": str(data.get("storage_location", "")).strip(),
+        "storage_location": location,
         "notes": str(data.get("notes", "")).strip(),
         "created_at": now_str(),
         "starting_stock": start_qty,
@@ -150,6 +543,19 @@ def add_product(data: Dict[str, Any]) -> Tuple[bool, str]:
         "supplier": str(data.get("supplier", "")).strip(),
         "expiry_date": str(data.get("expiry_date", "")).strip(),
         "added_by": current_user_safe(),
+        "category": category,
+        "serial_number": str(data.get("serial_number", "")).strip(),
+        "device_status": device_status,
+        "units_per_carton": to_number(data.get("units_per_carton", 0)),
+        "purchase_date": str(data.get("purchase_date", "")).strip(),
+        "last_withdraw_date": str(data.get("last_withdraw_date", "")).strip(),
+        "device_condition": normalize_device_condition(
+            data.get("device_condition"),
+            DEVICE_CONDITION_DEFAULT if category == PRODUCT_CATEGORY_COMPUTER else "",
+        ),
+        "decommission_date": "",
+        "decommission_reason": "",
+        "decommissioned_by": "",
     }
     append_row(_key(), SHEETS["products"], row)
     if count_rows_where(_key(), SHEETS["products"], "product_code", code) == 0:
@@ -185,13 +591,112 @@ def update_product(code: str, updates: Dict[str, Any]) -> Tuple[bool, str]:
         "manufacturer",
         "supplier",
         "expiry_date",
+        "date_added",
+        "category",
+        "serial_number",
+        "device_status",
+        "units_per_carton",
+        "purchase_date",
+        "last_withdraw_date",
+        "device_condition",
+        "decommission_date",
+        "decommission_reason",
+        "decommissioned_by",
     }
     clean = {k: v for k, v in updates.items() if k in allowed}
-    for k in ("min_stock", "current_stock"):
+    for k in ("min_stock", "current_stock", "units_per_carton"):
         if k in clean:
             clean[k] = to_number(clean[k])
+    for k in ("purchase_date", "last_withdraw_date", "decommission_date"):
+        if k in clean:
+            clean[k] = str(clean[k] or "").strip()
+    for k in ("decommission_reason", "decommissioned_by"):
+        if k in clean:
+            clean[k] = str(clean[k] or "").strip()
+    if "serial_number" in clean:
+        clean["serial_number"] = str(clean["serial_number"] or "").strip()
+    if "category" in clean:
+        clean["category"] = normalize_category(clean["category"])
+    if "device_status" in clean:
+        default_status = (
+            DEVICE_STATUS_DEFAULT
+            if clean.get("category") == PRODUCT_CATEGORY_PCR
+            else ""
+        )
+        clean["device_status"] = normalize_device_status(clean["device_status"], default_status)
+    if "device_condition" in clean:
+        condition_default = (
+            DEVICE_CONDITION_DEFAULT
+            if clean.get("category") == PRODUCT_CATEGORY_COMPUTER
+            else ""
+        )
+        clean["device_condition"] = normalize_device_condition(
+            clean["device_condition"], condition_default
+        )
+    default_location = ""
+    if clean.get("category") == PRODUCT_CATEGORY_PCR:
+        default_location = PCR_STORAGE_SECTION
+    elif clean.get("category") == PRODUCT_CATEGORY_CHEMICALS:
+        default_location = CHEMICALS_STORAGE_SECTION
+    elif clean.get("category") == PRODUCT_CATEGORY_OFFICE:
+        default_location = OFFICE_STORAGE_SECTION
+    elif clean.get("category") == PRODUCT_CATEGORY_COMPUTER:
+        default_location = COMPUTER_STORAGE_SECTION
+    if default_location:
+        if "storage_location" in clean:
+            if not str(clean["storage_location"] or "").strip():
+                clean["storage_location"] = default_location
+        else:
+            current = find_product(code)
+            if current and not str(current.get("storage_location", "") or "").strip():
+                clean["storage_location"] = default_location
     ok = update_row(_key(), SHEETS["products"], "product_code", code, clean)
     return (ok, "تم تحديث الصنف." if ok else "لم يتم العثور على الصنف.")
+
+
+def decommission_device(
+    source: str,
+    product_code: str,
+    decommission_date: str = "",
+    reason: str = "",
+    person: str = "",
+) -> Tuple[bool, str]:
+    """تسجيل تكهين جهاز من PCR أو مستلزمات الكمبيوتر وتحديث حالته إلى مكهن."""
+    category = normalize_category(source)
+    if category not in (PRODUCT_CATEGORY_PCR, PRODUCT_CATEGORY_COMPUTER):
+        return False, "مصدر الجهاز يجب أن يكون PCR أو مستلزمات الكمبيوتر."
+    code = str(product_code or "").strip()
+    if not code:
+        return False, "اختيار الجهاز مطلوب."
+    reason = str(reason or "").strip()
+    if not reason:
+        return False, "سبب التكهين مطلوب."
+    person = str(person or "").strip()
+    if not person:
+        return False, "اسم القائم بالتكهين مطلوب."
+
+    product = find_product(code)
+    if not product:
+        return False, "لم يتم العثور على الجهاز المحدد."
+    if normalize_category(product.get("category")) != category:
+        return False, "الجهاز المحدد لا ينتمي إلى المصدر المختار."
+    if normalize_device_status(product.get("device_status")) == DEVICE_STATUS_DECOMMISSIONED:
+        return False, "هذا الجهاز مكهن مسبقًا."
+
+    date_value = normalize_timestamp(decommission_date)[:10]
+    ok, msg = update_product(
+        code,
+        {
+            "device_status": DEVICE_STATUS_DECOMMISSIONED,
+            "decommission_date": date_value,
+            "decommission_reason": reason,
+            "decommissioned_by": person,
+        },
+    )
+    if not ok:
+        return False, msg
+    name = str(product.get("product_name") or "").strip()
+    return True, f"تم تكهين «{name or code}» وتحديث حالته إلى {DEVICE_STATUS_DECOMMISSIONED}."
 
 
 def delete_product(code: str, force: bool = False) -> Tuple[bool, str]:
@@ -653,6 +1158,14 @@ def add_stock_item(
     manufacturer: str = "",
     supplier: str = "",
     expiry_date: str = "",
+    category: str = PRODUCT_CATEGORY_GENERAL,
+    storage_location: str = "",
+    serial_number: str = "",
+    device_status: str = "",
+    units_per_carton: float = 0,
+    purchase_date: str = "",
+    last_withdraw_date: str = "",
+    device_condition: str = "",
 ) -> Tuple[bool, str]:
     """إضافة صنف جديد للمخزن برصيد افتتاحي (كود يُولَّد تلقائيًا إن لم يُحدَّد)."""
     name = str(name or "").strip()
@@ -681,6 +1194,14 @@ def add_stock_item(
             "manufacturer": str(manufacturer or "").strip(),
             "supplier": str(supplier or "").strip(),
             "expiry_date": str(expiry_date or "").strip(),
+            "category": normalize_category(category),
+            "storage_location": str(storage_location or "").strip(),
+            "serial_number": str(serial_number or "").strip(),
+            "device_status": normalize_device_status(device_status),
+            "units_per_carton": to_number(units_per_carton, 0),
+            "purchase_date": str(purchase_date or "").strip(),
+            "last_withdraw_date": str(last_withdraw_date or "").strip(),
+            "device_condition": str(device_condition or "").strip(),
         }
     )
 
@@ -691,6 +1212,7 @@ def sell_draw_item(
     person: str,
     timestamp: str = "",
     supervisor: str = "",
+    notes: str = "",
 ) -> Tuple[bool, str]:
     """صرف كمية من صنف مباشرة (بدون طلبية): يخصم من المخزن ويسجّل عملية مستقلة بطابع زمني."""
     qty = to_number(qty, -1)
@@ -719,7 +1241,11 @@ def sell_draw_item(
         SHEETS["products"],
         "product_code",
         product_code,
-        {"current_stock": new_stock, "total_withdrawn": new_total_withdrawn},
+        {
+            "current_stock": new_stock,
+            "total_withdrawn": new_total_withdrawn,
+            "last_withdraw_date": stamp,
+        },
     )
 
     append_row(
@@ -735,7 +1261,7 @@ def sell_draw_item(
             "withdraw_date": stamp,
             "withdrawn_by": person,
             "supervisor_name": supervisor,
-            "notes": "",
+            "notes": str(notes or "").strip(),
             "created_at": now_str(),
         },
     )
@@ -748,11 +1274,84 @@ def sell_draw_item(
         person=person,
         movement_type="سحب",
         movement_date=stamp,
+        notes=str(notes or "").strip(),
     )
     msg = f"تم سحب {qty:g} من «{product['product_name']}» بنجاح. الرصيد المتبقي: {new_stock:g}."
     if new_stock <= to_number(product["min_stock"]):
         msg += " ⚠️ المخزون منخفض."
     return True, msg
+
+
+def withdraw_chemical(
+    product_code: str,
+    qty: float,
+    person: str,
+    timestamp: str = "",
+    supervisor: str = "",
+    notes: str = "",
+) -> Tuple[bool, str]:
+    """سحب مادة كيميائية فقط، مع خصم الرصيد وتسجيل بيانات السحب والمستخدم."""
+    product = find_product(product_code)
+    if not product:
+        return False, "المادة الكيميائية غير موجودة في المخزون."
+    if normalize_category(product.get("category")) != PRODUCT_CATEGORY_CHEMICALS:
+        return False, "الصنف المحدد ليس مادة كيميائية."
+    return sell_draw_item(
+        product_code=product_code,
+        qty=qty,
+        person=person,
+        timestamp=timestamp,
+        supervisor=supervisor,
+        notes=notes,
+    )
+
+
+def withdraw_office_item(
+    product_code: str,
+    qty: float,
+    person: str,
+    timestamp: str = "",
+    supervisor: str = "",
+    notes: str = "",
+) -> Tuple[bool, str]:
+    """سحب صنف مكتبي فقط، مع تحديث الرصيد وتاريخ آخر سحب تلقائيًا."""
+    product = find_product(product_code)
+    if not product:
+        return False, "الصنف المكتبي غير موجود في المخزون."
+    if normalize_category(product.get("category")) != PRODUCT_CATEGORY_OFFICE:
+        return False, "الصنف المحدد ليس من أصناف المكتبية."
+    return sell_draw_item(
+        product_code=product_code,
+        qty=qty,
+        person=person,
+        timestamp=timestamp,
+        supervisor=supervisor,
+        notes=notes,
+    )
+
+
+def withdraw_computer_item(
+    product_code: str,
+    qty: float,
+    person: str,
+    timestamp: str = "",
+    supervisor: str = "",
+    notes: str = "",
+) -> Tuple[bool, str]:
+    """سحب صنف كمبيوتر فقط، مع خصم الكمية وتسجيل السحب في السجل العام."""
+    product = find_product(product_code)
+    if not product:
+        return False, "صنف مستلزمات الكمبيوتر غير موجود في المخزون."
+    if normalize_category(product.get("category")) != PRODUCT_CATEGORY_COMPUTER:
+        return False, "الصنف المحدد ليس من مستلزمات الكمبيوتر."
+    return sell_draw_item(
+        product_code=product_code,
+        qty=qty,
+        person=person,
+        timestamp=timestamp,
+        supervisor=supervisor,
+        notes=notes,
+    )
 
 
 # --------------------------------------------------------------------------- #
