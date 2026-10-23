@@ -100,6 +100,7 @@ SCHEMA: Dict[str, List[str]] = {
         "username",
         "password_hash",
         "role",
+        "lab_access",
         "created_at",
     ],
 }
@@ -315,6 +316,7 @@ def update_row(key: str, sheet_name: str, match_col: str, match_value: str, upda
     payload = {"match_col": match_col, "match_value": match_value, "updates": dict(updates)}
     if offline.use_local():
         offline.enqueue(sheet_name, "update", payload)
+        invalidate_cache()
         return offline.local_match(sheet_name, match_col, match_value)
     headers = SCHEMA[sheet_name]
     try:

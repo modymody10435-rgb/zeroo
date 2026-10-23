@@ -2396,7 +2396,7 @@ REAGENT_TYPE_MAP = {
 }
 
 def page_reagents_unified() -> None:
-    header("❄️ ثلاجات الكواشف (Reagents Refrigerators)", "إدارة ومتابعة كواشف PCR و Sequencing و Cell Culture")
+    header("❄️ ثلاجات الكواشف (Refrigerators)", "إدارة ومتابعة كواشف PCR و Sequencing و Cell Culture")
     
     # الحصول على صلاحية المعمل للمستخدم الحالي
     user_lab = get_user_lab_access()
@@ -2408,13 +2408,20 @@ def page_reagents_unified() -> None:
     else:
         st.caption(f"👤 المستخدم: **{username}** | الصلاحية: **معمل {user_lab}** فقط")
     
+    # DEBUG: عرض قيم الصلاحية للتشخيص
+    with st.expander("🔍 معلومات تصحيح الأخطاء (Debug)"):
+        st.write(f"اسم المستخدم المحفوظ: `{username}`")
+        st.write(f"صلاحية المعمل المُرجعة: `{user_lab}`")
+        st.write(f"قيم LABS المتاحة: `{LABS}`")
+    
     # جلب البيانات بناءً على صلاحية المستخدم
     all_reagents = []
     accessible_labs = []
     
     for r_type, conf in REAGENT_TYPE_MAP.items():
         # التحقق من صلاحية الوصول
-        if has_lab_access(r_type):
+        has_access = has_lab_access(r_type)
+        if has_access:
             accessible_labs.append(r_type)
             df_cat = products_by_category(conf["category"]).copy()
             if not df_cat.empty:

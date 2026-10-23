@@ -205,10 +205,15 @@ def get_user_lab_access(username: str = None) -> str:
     import streamlit as st
     if username is None:
         username = st.session_state.get("username", "")
+    if not username:
+        return LAB_ALL  # لا يوجد مستخدم مسجل، لا توجد صلاحية
     user = find_user(username)
     if not user:
+        # المستخدم مسجل لكن غير موجود في قاعدة البيانات (خطأ نادر)
+        # سنعود بـ LAB_ALL كإجراء احتياطي أخير
         return LAB_ALL
-    return str(user.get("lab_access", LAB_ALL)).strip() or LAB_ALL
+    lab = str(user.get("lab_access", LAB_ALL)).strip()
+    return lab if lab in LABS else LAB_ALL
 
 
 def has_lab_access(lab: str, username: str = None) -> bool:
