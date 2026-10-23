@@ -17,6 +17,13 @@ ROLE_ADMIN = "admin"
 ROLE_USER = "user"
 ROLES = [ROLE_ADMIN, ROLE_USER]
 
+# صلاحيات المعامل
+LAB_PCR = "PCR"
+LAB_SEQUENCING = "Sequencing"
+LAB_CELL_CULTURE = "Cell Culture"
+LAB_ALL = "All"
+LABS = [LAB_PCR, LAB_SEQUENCING, LAB_CELL_CULTURE, LAB_ALL]
+
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "adminpassword"
 
@@ -72,6 +79,7 @@ def bootstrap_default_admin() -> Optional[str]:
             "username": DEFAULT_ADMIN_USERNAME,
             "password_hash": hash_password(DEFAULT_ADMIN_PASSWORD),
             "role": ROLE_ADMIN,
+            "lab_access": LAB_ALL,
             "created_at": _now(),
         },
     )
@@ -100,7 +108,7 @@ def authenticate(username: str, password: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def add_user(username: str, password: str, role: str = ROLE_USER) -> Tuple[bool, str]:
+def add_user(username: str, password: str, role: str = ROLE_USER, lab_access: str = LAB_ALL) -> Tuple[bool, str]:
     username = str(username or "").strip()
     if not username:
         return False, "اسم المستخدم مطلوب."
@@ -108,6 +116,8 @@ def add_user(username: str, password: str, role: str = ROLE_USER) -> Tuple[bool,
         return False, "كلمة المرور يجب أن تكون 4 أحرف على الأقل."
     if role not in ROLES:
         return False, "الدور غير صالح."
+    if lab_access not in LABS:
+        return False, "صلاحية المعمل غير صالحة."
     if find_user(username):
         return False, f"اسم المستخدم «{username}» موجود مسبقًا."
     append_row(
@@ -117,10 +127,11 @@ def add_user(username: str, password: str, role: str = ROLE_USER) -> Tuple[bool,
             "username": username,
             "password_hash": hash_password(password),
             "role": role,
+            "lab_access": lab_access,
             "created_at": _now(),
         },
     )
-    return True, f"تم إضافة المستخدم «{username}»."
+    return True, f"تم إضافة المستخدم «{username}» مع صلاحية معمل {lab_access}."
 
 
 def delete_user(username: str) -> Tuple[bool, str]:
@@ -176,3 +187,31 @@ def list_users() -> List[Dict[str, Any]]:
     if users.empty:
         return []
     return users.to_dict("records")
+
+
+def set_lab_access(username: str, lab_access: str) -> Tuple[bool, str]:
+    """تحديث صلاحية المعمل للمستخدم."""
+    if lab_access not in LABS:
+        return False, "صلاحية المعمل غير صالحة."
+    user = find_user(username)
+    if not user:
+        return False, "المستخدم غير موجود."
+    ok = update_row(_key(), SHEETS["users"], "username", str(user["username"]), {"lab_access": lab_access})
+    return (ok, f"تم تحديث صلاحية المعمل إلى {lab_access}." if ok else "تعذر تحديث الصلاحية.")
+
+
+def get_user_lab_access(username: str = None) -> str:
+    """الحصول على صلاحية المعمل للمستخدم الحالي أو محدد."""
+    import streamlit as st
+    if username is None:
+        username = st.session_state.get("username", "")
+    user = find_user(username)
+    if not user:
+        return LAB_ALL
+    return str(user.get("lab_access", LAB_ALL)).strip() or LAB_ALL
+
+
+def has_lab_access(lab: str, username: str = None) -> bool:
+    """التحقق من صلاحية المستخدم للوصول إلى معمل محدد."""
+    user_lab = get_user_lab_access(username)
+    return user_lab == LAB_ALL or user_lab == lab

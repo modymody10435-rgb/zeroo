@@ -102,12 +102,20 @@ from core.services import (
 )
 from core.styles import header, inject_styles, metric_card
 from core.users import (
+    LAB_ALL,
+    LAB_CELL_CULTURE,
+    LAB_PCR,
+    LAB_SEQUENCING,
+    LABS,
     ROLE_ADMIN,
     ROLES,
     add_user,
     delete_user,
-    get_users,
+    get_user_lab_access,
+    has_lab_access,
+    list_users,
     reset_password,
+    set_lab_access,
     set_role,
 )
 
@@ -2387,16 +2395,329 @@ REAGENT_TYPE_MAP = {
 }
 
 def page_reagents_unified() -> None:
-    header("❄️ ثلاجات الكواشف (Reagents Refrigerators)", "إدارة ومتابعة كواشف PCR و Sequencing و Cell Culture في مكان واحد")
-    st.caption("قسم مستقل تماماً لإدارة كواشف الثلاجات وتتبع الكميات المسحوبة والمتبقية لكل قسم.")
-
-    # جلب جميع أصناف الأقسام الثلاثة
+    header("❄️ ثلاجات الكواشف (Reagents Refrigerators)", "إدارة ومتابعة كواشف PCR و Sequencing و Cell Culture")
+    
+    # الحصول على صلاحية المعمل للمستخدم الحالي
+    user_lab = get_user_lab_access()
+    username = current_username()
+    
+    # عرض معلومات الصلاحية
+    if user_lab == LAB_ALL:
+        st.caption(f"👤 المستخدم: **{username}** | الصلاحية: **جميع المعامل** (PCR, Sequencing, Cell Culture)")
+    else:
+        st.caption(f"👤 المستخدم: **{username}** | الصلاحية: **معمل {user_lab}** فقط")
+    
+    # جلب البيانات بناءً على صلاحية المستخدم
     all_reagents = []
+    accessible_labs = []
+    
     for r_type, conf in REAGENT_TYPE_MAP.items():
-        df_cat = products_by_category(conf["category"]).copy()
-        if not df_cat.empty:
-            df_cat["_reagent_section"] = r_type
-            all_reagents.append(df_cat)
+        # التحقق من صلاحية الوصول
+        if has_lab_access(r_type):
+            accessible_labs.append(r_type)
+            df_cat = products_by_category(conf["category"]).copy()
+            if not df_cat.empty:
+                df_cat["_reagent_section"] = r_type
+                all_reagents.append(df_cat)
+    
+    if not accessible_labs:
+        st.error("⚠️ ليس لديك صلاحية للوصول إلى أي معمل.")
+        return
+
+    if all_reagents:
+        full_df = pd.concat(all_reagents, ignore_index=True)
+    else:
+        full_df = pd.DataFrame()
+
+    # تجهيز الأعمدة والحسابات
+    if not full_df.empty:
+        for col, default in (
+            ("manufacturer", ""),
+            ("device_condition", ""),
+            ("starting_stock", 0),
+            ("total_withdrawn", 0),
+            ("current_stock", 0),
+            ("date_added", ""),
+            ("expiry_date", ""),
+            ("added_by", ""),
+        ):
+            if col not in full_df.columns:
+                full_df[col] = default
+
+        full_df["_initial"] = full_df.apply(_reagent_initial_value, axis=1)
+        full_df["_withdrawn"] = full_df["total_withdrawn"].apply(to_number)
+        full_df["_remaining"] = full_df["current_stock"].apply(to_number)
+        
+        # إضافة تحذير للكواشف القريبة من النفاذ (أقل من 20% من الكمية الأولية)
+        full_df["_low_stock"] = full_df.apply(
+            lambda row: row["_remaining"] < (row["_initial"] * 0.2) if row["_initial"] > 0 else False,
+            axis=1
+        )
+        low_stock_count = int(full_df["_low_stock"].sum())
+
+        # بطاقات إحصائيات سريعة
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("إجمالي الكواشف", len(full_df), width="stretch")
+        with c2:
+            st.metric("الكمية الأولية الكلية", f"{full_df['_initial'].sum():g}", width="stretch")
+        with c3:
+            st.metric("المتبقي في الثلاجات", f"{full_df['_remaining'].sum():g}", width="stretch")
+        with c4:
+            st.metric("⚠️ كواشف قاربت على النفاذ", low_stock_count, delta=None, delta_color="inverse", width="stretch")
+
+    last_withdrawals = _reagent_last_withdrawals()
+
+    # التابات العامة الموحدة
+    tab_list, tab_add, tab_withdraw, tab_delete = st.tabs([
+        "📋 سجل ومخزون الكواشف",
+        "➕ إضافة كاشف جديد",
+        "📤 تسجيل سحب كاشف",
+        "🗑️ حذف كاشف"
+    ])
+
+    # ---------------- 1) إضافة كاشف ---------------- #
+    with tab_add:
+        st.markdown("#### ➕ إضافة كاشف إلى الثلاجة")
+        
+        # تصفية الخيارات بناءً على صلاحية المستخدم
+        with st.form("add_unified_reagent_form", clear_on_submit=True):
+            r_type_selected = st.selectbox(
+                "📂 اختر القسم التابع له الكاشف *",
+                options=accessible_labs,
+                width="stretch",
+                key="unified_reagent_type_select"
+            )
+
+            target_conf = REAGENT_TYPE_MAP[r_type_selected]
+            st.caption(f"سيتم حفظ الكاشف ضمن تصنيف «{target_conf['category']}» في موقع التخزين: «{target_conf['storage']}».")
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                code = st.text_input(f"كود كاشف {r_type_selected} *", width="stretch")
+            with c2:
+                name = st.text_input(f"اسم كاشف {r_type_selected} *", width="stretch")
+            with c3:
+                company = st.text_input("الشركة المصنعة", width="stretch")
+
+            c4, c5, c6 = st.columns(3)
+            with c4:
+                date_added = st.date_input("تاريخ الإضافة", value=date.today(), width="stretch")
+            with c5:
+                expiry_date = st.date_input("تاريخ الانتهاء", value=None, width="stretch")
+            with c6:
+                condition = st.selectbox("حالة الكاشف", options=DEVICE_CONDITIONS, index=0, width="stretch")
+
+            c7, c8 = st.columns(2)
+            with c7:
+                initial_qty = st.number_input("الكمية الأولية *", min_value=0.0, step=1.0, value=None, width="stretch")
+            with c8:
+                withdrawn_qty = st.number_input("الكمية المسحوبة المبدئية", min_value=0.0, step=1.0, value=0.0, width="stretch")
+
+            notes = st.text_area("ملاحظات", height=80, width="stretch")
+            submitted = st.form_submit_button("➕ حفظ الكاشف في الثلاجة", type="primary", use_container_width=True)
+
+            if submitted:
+                if not code.strip() or not name.strip():
+                    st.error("الكود واسم الكاشف حقول إلزامية.")
+                elif to_number(initial_qty, -1) < 0:
+                    st.error("يرجى إدخال كمية أولية صحيحة.")
+                else:
+                    ok, msg = add_reagent_item(
+                        product_code=code.strip(),
+                        product_name=name.strip(),
+                        company=company.strip(),
+                        date_added=date_added.strftime("%Y-%m-%d") if date_added else "",
+                        expiry_date=expiry_date.strftime("%Y-%m-%d") if expiry_date else "",
+                        condition=condition,
+                        initial_qty=initial_qty,
+                        withdrawn_qty=withdrawn_qty,
+                        category=target_conf["category"],
+                        storage_location=target_conf["storage"],
+                        notes=notes.strip(),
+                    )
+                    if ok:
+                        st.success(f"✅ تمت إضافة ({name}) بنجاح إلى قسم {r_type_selected}!")
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+    # ---------------- 2) تسجيل سحب كاشف (أولوية لمعمل المستخدم) ---------------- #
+    with tab_withdraw:
+        st.markdown("#### 📤 تسجيل سحب كاشف من الثلاجة")
+        
+        if user_lab != LAB_ALL:
+            st.info(f"🎯 **أولوية السحب**: سيتم عرض كواشف معمل **{user_lab}** أولاً")
+        
+        if full_df.empty:
+            st.info("لا توجد كواشف مسجلة في الثلاجات لسحبها.")
+        else:
+            active_reagents = full_df[full_df["current_stock"].apply(to_number) > 0].copy()
+            if active_reagents.empty:
+                st.info("جميع الكواشف رصيدها المتبقي 0 حالياً.")
+            else:
+                # ترتيب الكواشف: معمل المستخدم أولاً
+                if user_lab != LAB_ALL:
+                    user_lab_reagents = active_reagents[active_reagents["_reagent_section"] == user_lab]
+                    other_reagents = active_reagents[active_reagents["_reagent_section"] != user_lab]
+                    active_reagents = pd.concat([user_lab_reagents, other_reagents], ignore_index=True)
+                
+                reagent_options = {}
+                for _, row in active_reagents.iterrows():
+                    sec = row.get("_reagent_section", "")
+                    cd = _product_note(row.get("product_code"))
+                    nm = _product_note(row.get("product_name"))
+                    rem = to_number(row.get("current_stock"))
+                    
+                    # إضافة علامة تحذير للكواشف القريبة من النفاذ
+                    warning = " ⚠️ قارب على النفاذ" if row.get("_low_stock", False) else ""
+                    label = f"[{sec}] {nm} (كود: {cd}) — المتبقي: {rem:g}{warning}"
+                    reagent_options[label] = cd
+
+                chosen_label = st.selectbox(
+                    "اختر الكاشف المراد السحب منه *",
+                    options=list(reagent_options.keys()),
+                    index=None,
+                    placeholder="ابحث واختر الكاشف...",
+                    width="stretch"
+                )
+
+                if chosen_label:
+                    selected_code = reagent_options[chosen_label]
+                    selected_row = active_reagents[active_reagents["product_code"].astype(str).str.strip() == selected_code].iloc[0]
+                    cur_rem = to_number(selected_row.get("current_stock"))
+                    selected_section = selected_row.get("_reagent_section")
+
+                    with st.form("unified_withdraw_form"):
+                        st.caption(f"القسم: **{selected_section}** | الكود: **{selected_code}** | الرصيد المتبقي: **{cur_rem:g}**")
+                        w_c1, w_c2 = st.columns(2)
+                        with w_c1:
+                            w_qty = st.number_input("الكمية المسحوبة *", min_value=0.0, max_value=float(cur_rem), step=1.0, value=None, width="stretch")
+                        with w_c2:
+                            w_person = st.text_input("اسم المستخدم القائم بالسحب *", value=username, width="stretch")
+
+                        w_c3, w_c4 = st.columns(2)
+                        with w_c3:
+                            w_date = st.date_input("تاريخ السحب", value=date.today(), width="stretch")
+                        with w_c4:
+                            w_notes = st.text_input("ملاحظات السحب", placeholder="", width="stretch")
+
+                        w_sub = st.form_submit_button("📤 تأكيد سحب الكمية", type="primary", use_container_width=True)
+
+                    if w_sub:
+                        if to_number(w_qty, 0) <= 0:
+                            st.error("أدخل كمية مسحوبة أكبر من صفر.")
+                        elif not w_person.strip():
+                            st.error("اسم المستخدم القائم بالسحب مطلوب.")
+                        else:
+                            ok, msg = withdraw_reagent_item(
+                                selected_code,
+                                w_qty,
+                                w_person.strip(),
+                                w_date.strftime("%Y-%m-%d") if w_date else "",
+                                w_notes.strip()
+                            )
+                            if ok:
+                                st.success(f"✅ تم سحب {w_qty:g} من كاشف ({selected_row.get('product_name')}) بنجاح!")
+                                st.rerun()
+                            else:
+                                st.error(msg)
+
+    # ---------------- 3) حذف كاشف ---------------- #
+    with tab_delete:
+        st.markdown("#### 🗑️ حذف كاشف من الثلاجة")
+        if full_df.empty:
+            st.info("لا توجد كواشف للحذف.")
+        else:
+            del_options = {
+                f"[{r.get('_reagent_section')}] {_product_note(r.get('product_name'))} (كود: {_product_note(r.get('product_code'))})": str(r.get("product_code"))
+                for _, r in full_df.iterrows()
+            }
+            with st.form("unified_delete_reagent_form"):
+                del_choice = st.selectbox("اختر الكاشف المراد حذفه نهائياً", options=list(del_options.keys()), index=None, width="stretch")
+                confirmed = st.checkbox("أؤكد رغبتي في حذف هذا الكاشف نهائياً", width="stretch")
+                del_sub = st.form_submit_button("🗑️ حذف الكاشف", type="primary", use_container_width=True)
+
+            if del_sub:
+                if not del_choice:
+                    st.warning("يرجى اختيار كاشف أولاً.")
+                elif not confirmed:
+                    st.warning("يرجى تأكيد الحذف عبر المربع.")
+                else:
+                    ok, msg = delete_product(del_options[del_choice], force=True)
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+    # ---------------- 4) جدول العرض والفلترة ---------------- #
+    with tab_list:
+        if full_df.empty:
+            st.info(f"لا توجد كواشف مسجلة في {'معمل ' + user_lab if user_lab != LAB_ALL else 'المعامل المتاحة'} بعد. استخدم تبويب «➕ إضافة كاشف جديد».")
+            return
+
+        # الفلاتر
+        f_col1, f_col2, f_col3 = st.columns([1, 1, 2])
+        with f_col1:
+            filter_options = ["الكل"] + accessible_labs
+            cat_filter = st.selectbox("🗂️ عرض قسم محدد:", filter_options, key="reagent_view_filter")
+        with f_col2:
+            stock_filter = st.selectbox("⚠️ حالة المخزون:", ["الكل", "قارب على النفاذ", "متوفر"], key="stock_status_filter")
+        with f_col3:
+            search_txt = st.text_input("🔍 ابحث بالاسم أو الكود أو الشركة", placeholder="", key="reagent_search_txt")
+
+        display_df = full_df.copy()
+        
+        # تطبيق الفلاتر
+        if cat_filter != "الكل":
+            display_df = display_df[display_df["_reagent_section"] == cat_filter]
+        
+        if stock_filter == "قارب على النفاذ":
+            display_df = display_df[display_df["_low_stock"] == True]
+        elif stock_filter == "متوفر":
+            display_df = display_df[display_df["_low_stock"] == False]
+
+        if search_txt.strip():
+            term = search_txt.strip()
+            display_df = display_df[
+                display_df["product_code"].astype(str).str.contains(term, case=False, na=False)
+                | display_df["product_name"].astype(str).str.contains(term, case=False, na=False)
+                | display_df["manufacturer"].astype(str).str.contains(term, case=False, na=False)
+            ]
+
+        if display_df.empty:
+            st.info("لا توجد نتائج مطابقة لمعايير البحث.")
+            return
+
+        # تنسيق الجدول للعرض
+        display_df["_last_withdrawn_by"] = display_df["product_code"].apply(
+            lambda val: last_withdrawals.get(str(val).strip(), "—")
+        )
+        display_df["_status"] = display_df["_low_stock"].apply(lambda x: "⚠️ قارب على النفاذ" if x else "✓ متوفر")
+
+        st.markdown(f"#### 📊 عرض {len(display_df)} كاشف")
+        
+        table_cols = {
+            "_reagent_section": "القسم",
+            "product_code": "الكود",
+            "product_name": "اسم الكاشف",
+            "manufacturer": "الشركة المصنعة",
+            "_initial": "الكمية الأولية",
+            "_withdrawn": "المسحوب",
+            "_remaining": "المتبقي",
+            "_status": "الحالة",
+            "date_added": "تاريخ الإضافة",
+            "expiry_date": "تاريخ الانتهاء",
+            "device_condition": "الحالة",
+            "_last_withdrawn_by": "آخر سحب بواسطة",
+        }
+
+        st.dataframe(
+            display_df[list(table_cols.keys())].rename(columns=table_cols),
+            use_container_width=True,
+            hide_index=True
+        )
 
     if all_reagents:
         full_df = pd.concat(all_reagents, ignore_index=True)
@@ -5994,11 +6315,19 @@ def _users_dataframe():
     if users.empty:
         return users
     view = users.copy()
-    view["الحالة"] = view["role"].apply(lambda r: "👑 مدير" if str(r).strip().lower() == ROLE_ADMIN else "👤 مستخدم")
+    view["الصلاحية"] = view["role"].apply(lambda r: "👑 مدير" if str(r).strip().lower() == ROLE_ADMIN else "👤 مستخدم")
+    view["صلاحية المعمل"] = view.get("lab_access", LAB_ALL).apply(
+        lambda lab: {
+            LAB_ALL: "🌐 جميع المعامل",
+            LAB_PCR: "🧬 PCR فقط",
+            LAB_SEQUENCING: "🧬 Sequencing فقط",
+            LAB_CELL_CULTURE: "🧫 Cell Culture فقط"
+        }.get(str(lab).strip(), str(lab))
+    )
     cols = ["username"]
     if "created_at" in view.columns:
         cols.append("created_at")
-    cols.append("الحالة")
+    cols.extend(["الصلاحية", "صلاحية المعمل"])
     return view[cols].rename(
         columns={"username": "اسم المستخدم", "created_at": "تاريخ الإنشاء"}
     )
@@ -6033,9 +6362,24 @@ def page_users() -> None:
                     width="stretch",
                     placeholder="",
                 )
+            
+            st.markdown("##### 🔬 صلاحية الوصول للمعامل")
+            new_lab_access = st.selectbox(
+                "المعمل المسموح بالوصول إليه",
+                options=LABS,
+                index=0,
+                format_func=lambda lab: {
+                    LAB_ALL: "🌐 جميع المعامل (PCR, Sequencing, Cell Culture)",
+                    LAB_PCR: "🧬 معمل PCR فقط",
+                    LAB_SEQUENCING: "🧬 معمل Sequencing فقط",
+                    LAB_CELL_CULTURE: "🧫 معمل Cell Culture فقط"
+                }.get(lab, lab),
+                width="stretch"
+            )
+            
             submitted = st.form_submit_button("➕ إضافة المستخدم", type="primary", use_container_width=True)
         if submitted:
-            ok, msg = add_user(new_username, new_password, new_role)
+            ok, msg = add_user(new_username, new_password, new_role, new_lab_access)
             st.success(msg) if ok else st.error(msg)
             if ok:
                 st.rerun()
@@ -6101,29 +6445,73 @@ def page_users() -> None:
                     st.success(msg) if ok else st.error(msg)
 
     st.write("")
-    st.markdown("#### ⚙️ صلاحية المستخدم")
+    st.markdown("#### ⚙️ تحديث صلاحيات المستخدم")
     if usernames:
-        with st.form("set_role_form"):
-            c1, c2 = st.columns(2)
-            with c1:
-                target = st.selectbox(
-                    "اختر المستخدم", options=usernames, index=None, placeholder="", width="stretch"
-                )
-            with c2:
-                role = st.selectbox(
-                    "الصلاحية",
-                    options=ROLES,
-                    format_func=lambda r: "👑 مدير" if r == ROLE_ADMIN else "👤 مستخدم",
-                    width="stretch",
-                    placeholder="",
-                )
-            submitted = st.form_submit_button("💾 حفظ الصلاحية", use_container_width=True)
-        if submitted:
-            if not target:
-                st.warning("⚠️ يرجى اختيار مستخدم أولاً.")
-            else:
-                ok, msg = set_role(target, role)
-                st.success(msg) if ok else st.error(msg)
+        c_tabs1, c_tabs2 = st.columns(2)
+        
+        with c_tabs1:
+            st.markdown("##### 🔐 صلاحية النظام")
+            with st.form("set_role_form"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    target_role = st.selectbox(
+                        "اختر المستخدم", 
+                        options=usernames, 
+                        index=None, 
+                        placeholder="", 
+                        width="stretch",
+                        key="role_user_select"
+                    )
+                with c2:
+                    role = st.selectbox(
+                        "الصلاحية",
+                        options=ROLES,
+                        format_func=lambda r: "👑 مدير" if r == ROLE_ADMIN else "👤 مستخدم",
+                        width="stretch",
+                        placeholder="",
+                    )
+                submitted_role = st.form_submit_button("💾 حفظ صلاحية النظام", use_container_width=True)
+            if submitted_role:
+                if not target_role:
+                    st.warning("⚠️ يرجى اختيار مستخدم أولاً.")
+                else:
+                    ok, msg = set_role(target_role, role)
+                    st.success(msg) if ok else st.error(msg)
+        
+        with c_tabs2:
+            st.markdown("##### 🔬 صلاحية المعمل")
+            with st.form("set_lab_form"):
+                c3, c4 = st.columns(2)
+                with c3:
+                    target_lab = st.selectbox(
+                        "اختر المستخدم",
+                        options=usernames,
+                        index=None,
+                        placeholder="",
+                        width="stretch",
+                        key="lab_user_select"
+                    )
+                with c4:
+                    lab_access = st.selectbox(
+                        "المعمل المسموح",
+                        options=LABS,
+                        format_func=lambda lab: {
+                            LAB_ALL: "🌐 جميع المعامل",
+                            LAB_PCR: "🧬 PCR",
+                            LAB_SEQUENCING: "🧬 Sequencing",
+                            LAB_CELL_CULTURE: "🧫 Cell Culture"
+                        }.get(lab, lab),
+                        width="stretch"
+                    )
+                submitted_lab = st.form_submit_button("💾 حفظ صلاحية المعمل", use_container_width=True)
+            if submitted_lab:
+                if not target_lab:
+                    st.warning("⚠️ يرجى اختيار مستخدم أولاً.")
+                else:
+                    ok, msg = set_lab_access(target_lab, lab_access)
+                    st.success(msg) if ok else st.error(msg)
+                    if ok:
+                        st.rerun()
 
     # ------------------------------------------------------------------ #
     #               تصفير البيانات التجريبية (إجراء خطر — للمدير فقط)
