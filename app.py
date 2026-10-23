@@ -6317,14 +6317,17 @@ def _users_dataframe():
         return users
     view = users.copy()
     view["الصلاحية"] = view["role"].apply(lambda r: "👑 مدير" if str(r).strip().lower() == ROLE_ADMIN else "👤 مستخدم")
-    view["صلاحية المعمل"] = view.get("lab_access", LAB_ALL).apply(
-        lambda lab: {
-            LAB_ALL: "🌐 جميع المعامل",
-            LAB_PCR: "🧬 PCR فقط",
-            LAB_SEQUENCING: "🧬 Sequencing فقط",
-            LAB_CELL_CULTURE: "🧫 Cell Culture فقط"
-        }.get(str(lab).strip(), str(lab))
-    )
+    if "lab_access" in view.columns:
+        view["صلاحية المعمل"] = view["lab_access"].apply(
+            lambda lab: {
+                LAB_ALL: "🌐 جميع المعامل",
+                LAB_PCR: "🧬 PCR فقط",
+                LAB_SEQUENCING: "🧬 Sequencing فقط",
+                LAB_CELL_CULTURE: "🫫 Cell Culture فقط"
+            }.get(str(lab).strip(), str(lab))
+        )
+    else:
+        view["صلاحية المعمل"] = LAB_ALL
     cols = ["username"]
     if "created_at" in view.columns:
         cols.append("created_at")
