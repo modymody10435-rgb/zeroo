@@ -30,7 +30,7 @@ hiddenimports = [
 
 # ملفات Streamlit الثابتة (واجهة المتصفح) + pyarrow (أساسية لعرض الجداول)
 # + شهادات TLS + قاعدة المناطق الزمنية.
-for pkg in ("streamlit", "pyarrow", "certifi", "tzdata"):
+for pkg in ("streamlit", "pyarrow", "certifi", "tzdata", "pdfplumber", "pdfminer", "pypdfium2"):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
     except Exception:  # noqa: BLE001 — حزمة غير مثبتة: تجاهل

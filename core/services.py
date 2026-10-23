@@ -580,6 +580,170 @@ def add_product(data: Dict[str, Any]) -> Tuple[bool, str]:
     return True, msg
 
 
+def add_reagent_item(
+    *,
+    product_code: str,
+    product_name: str,
+    company: str,
+    date_added: str,
+    expiry_date: str,
+    condition: str,
+    initial_qty: float,
+    withdrawn_qty: float,
+    category: str,
+    storage_location: str = "",
+    notes: str = "",
+) -> Tuple[bool, str]:
+    """إضافة كاشف مع كمية أولية وكمية مسحوبة وحساب المتبقي وتوثيق المستخدم."""
+    code = str(product_code or "").strip()
+    name = str(product_name or "").strip()
+    if not code:
+        return False, "كود الصنف مطلوب."
+    if not name:
+        return False, "اسم الصنف مطلوب."
+    if find_product(code):
+        return False, f"كود الصنف {code} موجود مسبقًا."
+
+    initial = to_number(initial_qty)
+    withdrawn = to_number(withdrawn_qty)
+    if initial < 0:
+        return False, "الكمية الأولية يجب أن تكون صفرًا أو أكثر."
+    if withdrawn < 0:
+        return False, "الكمية المسحوبة يجب أن تكون صفرًا أو أكثر."
+    if withdrawn > initial + 1e-9:
+        return False, "الكمية المسحوبة لا يمكن أن تكون أكبر من الكمية الأولية."
+    remaining = initial - withdrawn
+
+    added_by = current_user_safe()
+    stamp = normalize_timestamp(date_added)
+    row = {
+        "product_code": code,
+        "product_name": name,
+        "unit": "وحدة",
+        "current_stock": remaining,
+        "min_stock": 0,
+        "storage_location": str(storage_location or "").strip(),
+        "notes": str(notes or "").strip(),
+        "created_at": now_str(),
+        "starting_stock": initial,
+        "total_withdrawn": withdrawn,
+        "date_added": stamp,
+        "manufacturer": str(company or "").strip(),
+        "supplier": "",
+        "expiry_date": str(expiry_date or "").strip(),
+        "added_by": added_by,
+        "category": normalize_category(category),
+        "serial_number": "",
+        "device_status": "",
+        "units_per_carton": 0,
+        "purchase_date": "",
+        "last_withdraw_date": stamp if withdrawn > 0 else "",
+        "device_condition": normalize_device_condition(
+            condition, DEVICE_CONDITION_DEFAULT
+        ),
+        "decommission_date": "",
+        "decommission_reason": "",
+        "decommissioned_by": "",
+    }
+    append_row(_key(), SHEETS["products"], row)
+    if count_rows_where(_key(), SHEETS["products"], "product_code", code) == 0:
+        return False, f"تعذر حفظ الكاشف {name} — لم يتم العثور على الصف بعد الإضافة."
+    sync_row(_key(), SHEETS["products"], "product_code", code, row)
+
+    if initial > 0:
+        record_movement(
+            order_no="",
+            product_code=code,
+            product_name=name,
+            qty=initial,
+            balance_after=initial,
+            person=added_by or "إضافة كاشف",
+            movement_type="إضافة رصيد",
+            notes="رصيد افتتاحي عند إنشاء الكاشف",
+        )
+    if withdrawn > 0:
+        record_movement(
+            order_no="",
+            product_code=code,
+            product_name=name,
+            qty=withdrawn,
+            balance_after=remaining,
+            person=added_by or "إضافة كاشف",
+            movement_type="سحب افتتاحي",
+            notes="كمية مسحوبة مسجلة عند إنشاء الكاشف",
+        )
+
+    return True, f"تم إضافة الكاشف {name} بنجاح. المتبقي: {remaining:g}."
+
+
+def withdraw_reagent_item(
+    product_code: str,
+    qty: float,
+    person: str,
+    timestamp: str = "",
+    notes: str = "",
+) -> Tuple[bool, str]:
+    """تسجيل سحب كاشف مع خصم الكمية وتوثيق المستخدم في سجل السحوبات والحركة."""
+    qty = to_number(qty, -1)
+    if qty <= 0:
+        return False, "الكمية المسحوبة يجب أن تكون أكبر من صفر."
+    person = str(person or "").strip()
+    if not person:
+        return False, "اسم المستخدم الذي قام بالسحب مطلوب."
+
+    product = find_product(product_code)
+    if not product:
+        return False, "الكاشف غير موجود في المخزون."
+    stock = to_number(product.get("current_stock"))
+    if qty > stock + 1e-9:
+        return False, f"الكمية أكبر من المتبقي المتاح ({stock:g})."
+
+    stamp = normalize_timestamp(timestamp)
+    new_stock = stock - qty
+    new_total_withdrawn = to_number(product.get("total_withdrawn")) + qty
+    withdrawal_id = f"W-{product_code}-{datetime.now().strftime('%H%M%S%f')[:10]}"
+    update_row(
+        _key(),
+        SHEETS["products"],
+        "product_code",
+        product_code,
+        {
+            "current_stock": new_stock,
+            "total_withdrawn": new_total_withdrawn,
+            "last_withdraw_date": stamp,
+        },
+    )
+    append_row(
+        _key(),
+        SHEETS["withdrawals"],
+        {
+            "withdrawal_id": withdrawal_id,
+            "order_no": "",
+            "item_id": "",
+            "product_code": product_code,
+            "product_name": product.get("product_name", ""),
+            "qty": qty,
+            "withdraw_date": stamp,
+            "withdrawn_by": person,
+            "supervisor_name": "",
+            "notes": str(notes or "").strip(),
+            "created_at": now_str(),
+        },
+    )
+    record_movement(
+        order_no="",
+        product_code=product_code,
+        product_name=product.get("product_name", ""),
+        qty=qty,
+        balance_after=new_stock,
+        person=person,
+        movement_type="سحب",
+        movement_date=stamp,
+        notes=str(notes or "").strip(),
+    )
+    return True, f"تم سحب {qty:g} من «{product.get('product_name', '')}». المتبقي: {new_stock:g}."
+
+
 def update_product(code: str, updates: Dict[str, Any]) -> Tuple[bool, str]:
     allowed = {
         "product_name",
