@@ -543,8 +543,16 @@ def _sidebar() -> str:
         # شارة حالة الاتصال/المزامنة (تتحدث تلقائيًا كل ثانيتين)
         _sidebar_sync_status()
         st.markdown("---")
-        sidebar_pages = PAGES[:4] + [REAGENTS_PARENT_PAGE] + PAGES[4:]
-        items = sidebar_pages + (ADMIN_PAGES if is_admin() else [])
+        if is_admin():
+            sidebar_pages = PAGES[:4] + [REAGENTS_PARENT_PAGE] + PAGES[4:]
+            items = sidebar_pages + ADMIN_PAGES
+        else:
+            # المستخدم غير الإداري يرى الرئيسية والسحب وأقسام الكواشف المصرح بها فقط.
+            items = [PAGES[0], PAGES[1]]
+            for lab in _accessible_reagent_types():
+                target = REAGENTS_SUB_PAGES.get(lab)
+                if target:
+                    items.append(target)
 
         # طلب تنقّل من أزرار الوصول السريع (يُستهلك قبل تركيب القائمة)
         pending = st.session_state.pop("pending_page", None)
@@ -684,8 +692,8 @@ def page_home() -> None:
     username = current_username()
     header(f"👤 مرحبا بك، {username}", "نظرة سريعة على حالة المخزن وآخر العمليات")
 
-    products = get_products()
-    withdrawals = get_withdrawals()
+    products = _filter_products_to_user_labs(get_products())
+    withdrawals = _filter_withdrawals_to_user_labs(get_withdrawals(), products)
 
     total_items = len(products)
     total_ops = len(withdrawals)
@@ -932,7 +940,7 @@ def page_home() -> None:
 def page_withdraw() -> None:
     header("📤 تسجيل سحب", "صرف صنف من المخزن — يُسجَّل الطابع الزمني تلقائيًا")
 
-    products = get_products()
+    products = _filter_products_to_user_labs(get_products())
     available = products[products["current_stock"].apply(to_number) > 0] if not products.empty else products
     if available.empty:
         st.info("لا توجد أصناف متاحة في المخزون. أضف أصنافًا من صفحة «➕ إدارة الأصناف».")
@@ -1038,7 +1046,8 @@ def page_withdraw() -> None:
 def _render_recent_withdrawals(limit: int = 5) -> None:
     st.write("")
     st.markdown("#### 🕒 آخر عمليات السحب")
-    w = get_withdrawals()
+    products_for_scope = _filter_products_to_user_labs(get_products())
+    w = _filter_withdrawals_to_user_labs(get_withdrawals(), products_for_scope)
     if w.empty:
         st.info("لا توجد عمليات سحب بعد.")
         return
@@ -2281,7 +2290,10 @@ def _render_reagents_unified_add_form() -> None:
 def _render_reagents_unified_withdraw_form() -> None:
     key_prefix = "reagents_unified"
     all_reagents = []
+    allowed_labs = set(_accessible_reagent_types())
     for section_name, config in REAGENTS_SECTION_CONFIG.items():
+        if section_name not in allowed_labs:
+            continue
         section_data = products_by_category(config["category"]).copy()
         if not section_data.empty:
             section_data["_section"] = section_name
@@ -2395,6 +2407,47 @@ REAGENT_TYPE_MAP = {
     }
 }
 
+
+def _accessible_reagent_types() -> list[str]:
+    """أنواع الكواشف المسموح بها للمستخدم الحالي وفق صلاحيات المعامل."""
+    if is_admin() or get_user_lab_access() == LAB_ALL:
+        return list(REAGENT_TYPE_MAP)
+    return [lab for lab in REAGENT_TYPE_MAP if has_lab_access(lab)]
+
+
+def _filter_products_to_user_labs(products: pd.DataFrame) -> pd.DataFrame:
+    """قصر أصناف المستخدم العادي على أقسام الكواشف المصرح بها."""
+    if products is None or products.empty or is_admin():
+        return products
+    allowed = _accessible_reagent_types()
+    categories = {
+        normalize_category(REAGENT_TYPE_MAP[lab]["category"])
+        for lab in allowed
+    }
+    if "category" not in products.columns:
+        return products.iloc[0:0].copy()
+    mask = products["category"].apply(normalize_category).isin(categories)
+    return products.loc[mask].copy()
+
+
+def _filter_withdrawals_to_user_labs(
+    withdrawals: pd.DataFrame, products: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    """يعرض سجلات السحب المرتبطة فقط بكواشف المعامل المصرح بها."""
+    if withdrawals is None or withdrawals.empty or is_admin():
+        return withdrawals
+    if products is None:
+        products = get_products()
+    scoped_products = _filter_products_to_user_labs(products)
+    if scoped_products is None or scoped_products.empty or "product_code" not in scoped_products.columns:
+        return withdrawals.iloc[0:0].copy()
+    allowed_codes = set(scoped_products["product_code"].astype(str).str.strip())
+    if "product_code" not in withdrawals.columns:
+        return withdrawals.iloc[0:0].copy()
+    return withdrawals.loc[
+        withdrawals["product_code"].astype(str).str.strip().isin(allowed_codes)
+    ].copy()
+
 def page_reagents_unified() -> None:
     header("❄️ ثلاجات الكواشف (Refrigerators)", "إدارة ومتابعة كواشف PCR و Sequencing و Cell Culture")
     
@@ -2420,7 +2473,7 @@ def page_reagents_unified() -> None:
     
     for r_type, conf in REAGENT_TYPE_MAP.items():
         # التحقق من صلاحية الوصول
-        has_access = has_lab_access(r_type)
+        has_access = r_type in _accessible_reagent_types()
         if has_access:
             accessible_labs.append(r_type)
             df_cat = products_by_category(conf["category"]).copy()
