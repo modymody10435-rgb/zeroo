@@ -112,6 +112,7 @@ from core.users import (
     add_user,
     delete_user,
     get_user_lab_access,
+    get_users,
     has_lab_access,
     list_users,
     reset_password,
