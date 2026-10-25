@@ -22,11 +22,9 @@
     - شارة المستخدم النشط أعلى الواجهة + زر تسجيل الخروج.
     - لوحة رئيسية بمؤشرات وآخر التحديثات وأزرار وصول سريع.
     - تخطيط متجاوب مع الهواتف المحمولة (عمود واحد + أهداف لمس أكبر).
-    - عمل دون اتصال (Offline-First): الحفظ في قاعدة بيانات محلية SQLite عند
-      انقطاع الإنترنت ودَفع تلقائي إلى Google Sheets فور عودة الاتصال، مع
-      شارة حالة (Online / Offline / Syncing) أعلى الواجهة وفي القائمة الجانبية.
+    - تخزين البيانات في PostgreSQL على السيرفر.
 
-قاعدة البيانات: SQLite محلية (نسخة الديسك توب) — ملف data/warehouse.db.
+قاعدة البيانات: PostgreSQL على السيرفر، عبر DATABASE_URL.
 """
 from __future__ import annotations
 
@@ -51,7 +49,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-from core import offline
 from core.auth import current_username, is_admin, is_logged_in, login_form, logout
 from core.config import load_config
 from core.db import DataError, configure, ensure_schema, spreadsheet_info, to_number
@@ -471,9 +468,8 @@ def _bootstrap() -> None:
         return
     cfg = load_config()
     try:
-        offline.configure(cfg)  # بيانات المزامنة الخلفية (بلا أي واجهة Streamlit)
-        configure(cfg.database_path)
-        ensure_schema(cfg.spreadsheet_key)  # يُؤجَّل تلقائيًا عند غياب الاتصال
+        configure(cfg.database_url or cfg.database_path)
+        ensure_schema("postgres")
         st.session_state["_db_ready"] = True
         st.session_state.pop("_db_error", None)
     except DataError as exc:
@@ -486,7 +482,12 @@ def _bootstrap() -> None:
 #                  شارة حالة الاتصال والمزامنة (تتحدث تلقائيًا)
 # --------------------------------------------------------------------------- #
 def _render_sync_pill() -> None:
-    st.markdown(offline.pill_html(), unsafe_allow_html=True)
+    st.markdown(
+        "<div style='display:inline-block;padding:5px 10px;border-radius:999px;"
+        "background:#e7f7ee;color:#166534;font-size:12px;font-weight:600;'>"
+        "🗄️ التخزين المركزي: PostgreSQL</div>",
+        unsafe_allow_html=True,
+    )
 
 
 @st.fragment(run_every=2)
@@ -596,7 +597,7 @@ def _sidebar() -> str:
         if info.get("url"):
             st.caption(f"🔗 مصدر البيانات: [{info['title']}]({info['url']})")
         elif info.get("title"):
-            st.caption(f"💾 قاعدة البيانات المحلية: `{info['title']}`")
+            st.caption(f"🗄️ قاعدة البيانات المركزية: `{info['title']}`")
         st.caption(f"🔧 إصدار التطبيق: `{_app_version()}`")
     return page
 
@@ -1617,7 +1618,7 @@ def _render_edit_item() -> None:
             movement_type="تعديل رصيد",
             notes=f"تعديل يدوي للرصيد من {cur_stock:g} إلى {new_stock:g}",
         )
-    st.success(f"{msg} 🔄 التعديلات محفوظة في Google Sheets.")
+    st.success(f"{msg} 🔄 التعديلات محفوظة في PostgreSQL.")
     st.rerun()
 
 
@@ -1668,7 +1669,7 @@ def _render_product_delete_form(
     with st.form(f"delete_{form_key}_form"):
         st.markdown(f"#### {heading}")
         st.caption(
-            "سيُحذف الصنف نهائيًا من ورقة Products في Google Sheets ومن النسخة المحلية. "
+            "سيُحذف الصنف نهائيًا من قاعدة بيانات PostgreSQL. "
             "تبقى سجلات السحوبات والحركات السابقة محفوظة."
         )
         choice = st.selectbox(
@@ -2460,12 +2461,6 @@ def page_reagents_unified() -> None:
         st.caption(f"👤 المستخدم: **{username}** | الصلاحية: **جميع المعامل** (PCR, Sequencing, Cell Culture)")
     else:
         st.caption(f"👤 المستخدم: **{username}** | الصلاحية: **معمل {user_lab}** فقط")
-    
-    # DEBUG: عرض قيم الصلاحية للتشخيص
-    with st.expander("🔍 معلومات تصحيح الأخطاء (Debug)"):
-        st.write(f"اسم المستخدم المحفوظ: `{username}`")
-        st.write(f"صلاحية المعمل المُرجعة: `{user_lab}`")
-        st.write(f"قيم LABS المتاحة: `{LABS}`")
     
     # جلب البيانات بناءً على صلاحية المستخدم
     all_reagents = []
@@ -4889,7 +4884,7 @@ def _render_authority_forms_delete_form() -> None:
     with st.form("delete_authority_form_item_form"):
         st.markdown("#### 🗑️ حذف صنف استمارات الهيئة")
         st.caption(
-            "سيُحذف الصنف مع كل سجلات الوارد والصرف الخاصة به من Google Sheets، "
+            "سيُحذف الصنف مع كل سجلات الوارد والصرف المرتبطة به من PostgreSQL، "
             "ويُخصم المتاح منه من رصيد استمارات الهيئة."
         )
         choice = st.selectbox(
@@ -6612,15 +6607,10 @@ def page_users() -> None:
 def main() -> None:
     cfg = load_config()
     try:
-        offline.configure(cfg)
-        offline.ensure_worker()
-        offline.flush_if_pending()
+        configure(cfg.database_url or cfg.database_path)
+        ensure_schema("postgres")
     except Exception as exc:  # noqa: BLE001
-        st.session_state["_db_error"] = f"تعذر تجهيز نظام المزامنة المحلية: {exc}"
-    try:
-        configure(cfg.database_path)
-    except Exception as exc:  # noqa: BLE001
-        st.session_state["_db_error"] = f"تعذر تجهيز مسار قاعدة البيانات: {exc}"
+        st.session_state["_db_error"] = f"تعذر إعداد الاتصال بقاعدة PostgreSQL: {exc}"
 
     if not is_logged_in():
         login_form()

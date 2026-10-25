@@ -1,4 +1,4 @@
-"""مصادقة متعددة المستخدمين عبر ورقة Google Sheets (مع ذاكرة دخول محلية دون اتصال)."""
+"""مصادقة متعددة المستخدمين باستخدام حسابات PostgreSQL."""
 from __future__ import annotations
 
 import hmac
@@ -30,40 +30,37 @@ def _check(username: str, password: str):
     على معرفة سبب الرفض (إعدادات ناقصة / لا اتصال وبدون حسابات محلية / بيانات
     غير صحيحة).
     """
-    from core.users import authenticate, bootstrap_default_admin
+    from core.users import authenticate, bootstrap_default_admin, find_user
 
     cfg = load_config()
-    if not cfg.spreadsheet_key:
-        return None, (
-            "لم يتم إعداد مفتاح الجدول (Google Sheet). "
-            "ضع ملف الإعدادات بجانب البرنامج: `.streamlit/secrets.toml` "
-            "← [gsheets] spreadsheet_key."
-        )
+    if not cfg.database_url and not __import__("os").getenv("DATABASE_URL"):
+        return None, "لم يتم إعداد DATABASE_URL لقاعدة PostgreSQL في متغيرات البيئة أو .streamlit/secrets.toml."
     user = None
-    google_error = ""
+    database_error = ""
     try:
         bootstrap_default_admin()
         user = authenticate(username, password)
     except Exception as exc:  # noqa: BLE001
-        google_error = str(exc)
-        LOGGER.warning("login: google sheets error: %s", exc)
+        database_error = str(exc)
+        LOGGER.warning("login: PostgreSQL error: %s", exc)
     if user:
         return user, ""
     # مسار احتياطي لحساب الأسرار المفرد (قبل تفعيل ورقة Users)
-    if hmac.compare_digest(username, cfg.username) and hmac.compare_digest(password, cfg.password):
+    # Emergency secret-based bootstrap is allowed only before an account with
+    # this username exists in the database; it cannot bypass a changed password.
+    try:
+        configured_user_exists = find_user(username) is not None
+    except Exception:
+        configured_user_exists = True
+    if (not configured_user_exists and cfg.password and len(cfg.password) >= 8
+            and hmac.compare_digest(username, cfg.username)
+            and hmac.compare_digest(password, cfg.password)):
         return {"username": cfg.username, "role": "admin"}, ""
     # تفسير سبب الرفض
-    if google_error:
+    if database_error:
         return None, (
-            "تعذر الوصول إلى بيانات المستخدمين من Google Sheets — "
-            f"تحقق من `service_account.json` ومن مشاركة الملف مع حساب الخدمة. "
-            f"(التفاصيل: {google_error})"
-        )
-    if not offline.is_online() and not _has_local_users():
-        return None, (
-            "لا توجد حسابات محفوظة على هذا الجهاز (قد يكون هذا أول تشغيل أو أول "
-            "تشغيل دون اتصال). شغّل البرنامج متصلًا بالإنترنت أول مرة لتنزيل "
-            "حسابات الموقع، ثم أعد المحاولة."
+            "تعذر الوصول إلى بيانات المستخدمين في PostgreSQL. "
+            f"تحقق من DATABASE_URL واتصال السيرفر. (التفاصيل: {database_error})"
         )
     LOGGER.warning("login: invalid credentials for user %r", username)
     return None, "اسم المستخدم أو كلمة المرور غير صحيحة."

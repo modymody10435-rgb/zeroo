@@ -34,9 +34,7 @@ def _now() -> str:
 
 def _key() -> str:
     cfg = load_config()
-    if not cfg.spreadsheet_key:
-        raise DataError("لم يتم إعداد مفتاح Google Sheet في الإعدادات (secrets.toml).")
-    return cfg.spreadsheet_key
+    return cfg.spreadsheet_key or "postgres"
 
 
 def hash_password(password: str, salt: str = "") -> str:
@@ -70,20 +68,23 @@ def bootstrap_default_admin() -> Optional[str]:
     users = get_users()
     if not users.empty:
         return None
-    if offline.use_local():
-        return None
+    cfg = load_config()
+    username = str(cfg.username or "").strip()
+    password = str(cfg.password or "")
+    if not username or len(password) < 8:
+        return "اضبط ADMIN_USERNAME وADMIN_PASSWORD (ثمانية أحرف على الأقل) قبل أول تسجيل دخول."
     append_row(
         _key(),
         SHEETS["users"],
         {
-            "username": DEFAULT_ADMIN_USERNAME,
-            "password_hash": hash_password(DEFAULT_ADMIN_PASSWORD),
+            "username": username,
+            "password_hash": hash_password(password),
             "role": ROLE_ADMIN,
             "lab_access": LAB_ALL,
             "created_at": _now(),
         },
     )
-    return f"تم إنشاء حساب المدير الافتراضي: {DEFAULT_ADMIN_USERNAME} / {DEFAULT_ADMIN_PASSWORD}"
+    return f"تم إنشاء حساب المدير الأولي: {username}. غيّر كلمة المرور بعد تسجيل الدخول."
 
 
 def find_user(username: str) -> Optional[Dict[str, Any]]:
@@ -108,7 +109,23 @@ def authenticate(username: str, password: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+
+def _admin_allowed() -> bool:
+    """Fail closed for account-management mutations outside an authenticated admin session."""
+    try:
+        import streamlit as st
+        return bool(st.session_state.get("logged_in")) and str(st.session_state.get("role", "")).strip().lower() == ROLE_ADMIN
+    except Exception:
+        return False
+
+def _deny_non_admin() -> Tuple[bool, str] | None:
+    if not _admin_allowed():
+        return False, "مرفوض: هذه العملية متاحة للمدير المسجّل فقط."
+    return None
+
 def add_user(username: str, password: str, role: str = ROLE_USER, lab_access: str = LAB_ALL) -> Tuple[bool, str]:
+    denied = _deny_non_admin()
+    if denied: return denied
     username = str(username or "").strip()
     if not username:
         return False, "اسم المستخدم مطلوب."
@@ -135,6 +152,8 @@ def add_user(username: str, password: str, role: str = ROLE_USER, lab_access: st
 
 
 def delete_user(username: str) -> Tuple[bool, str]:
+    denied = _deny_non_admin()
+    if denied: return denied
     users = get_users()
     if users.empty:
         return False, "لا يوجد مستخدمون."
@@ -149,6 +168,8 @@ def delete_user(username: str) -> Tuple[bool, str]:
 
 
 def reset_password(username: str, new_password: str) -> Tuple[bool, str]:
+    denied = _deny_non_admin()
+    if denied: return denied
     if len(str(new_password or "")) < 4:
         return False, "كلمة المرور يجب أن تكون 4 أحرف على الأقل."
     user = find_user(username)
@@ -165,6 +186,8 @@ def reset_password(username: str, new_password: str) -> Tuple[bool, str]:
 
 
 def set_role(username: str, role: str) -> Tuple[bool, str]:
+    denied = _deny_non_admin()
+    if denied: return denied
     if role not in ROLES:
         return False, "الدور غير صالح."
     user = find_user(username)
@@ -190,6 +213,8 @@ def list_users() -> List[Dict[str, Any]]:
 
 
 def set_lab_access(username: str, lab_access: str) -> Tuple[bool, str]:
+    denied = _deny_non_admin()
+    if denied: return denied
     """تحديث صلاحية المعمل للمستخدم."""
     if lab_access not in LABS:
         return False, "صلاحية المعمل غير صالحة."
@@ -206,12 +231,11 @@ def get_user_lab_access(username: str = None) -> str:
     if username is None:
         username = st.session_state.get("username", "")
     if not username:
-        return LAB_ALL  # لا يوجد مستخدم مسجل، لا توجد صلاحية
+        return ""  # لا توجد صلاحية دون هوية مستخدم مؤكدة
     user = find_user(username)
     if not user:
-        # المستخدم مسجل لكن غير موجود في قاعدة البيانات (خطأ نادر)
-        # سنعود بـ LAB_ALL كإجراء احتياطي أخير
-        return LAB_ALL
+        # Fail closed: a session user missing from PostgreSQL gets no lab access.
+        return ""
     lab = str(user.get("lab_access", LAB_ALL)).strip()
     return lab if lab in LABS else LAB_ALL
 

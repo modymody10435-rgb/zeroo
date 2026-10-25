@@ -22,13 +22,14 @@ SHEETS = {
 
 @dataclass
 class AppConfig:
-    spreadsheet_key: str = ""
+    spreadsheet_key: str = "postgres"
     service_account_file: str = "service_account.json"
     service_account_info: Optional[Dict[str, Any]] = None
     username: str = "admin"
     password: str = "admin123"
     app_title: str = "نظام إدارة مخزن المعمل"
-    database_path: str = "data/warehouse.db"
+    database_path: str = ""
+    database_url: str = ""
 
 
 def _secret(section: str, key: str, default: Any = None) -> Any:
@@ -42,28 +43,19 @@ def _secret(section: str, key: str, default: Any = None) -> Any:
 def load_config() -> AppConfig:
     cfg = AppConfig()
 
-    cfg.spreadsheet_key = str(
-        _secret("gsheets", "spreadsheet_key", os.getenv("GSHEETS_KEY", "")) or ""
-    ).strip()
-    cfg.service_account_file = str(
-        _secret("gsheets", "service_account_file", os.getenv("GSHEETS_SA_FILE", "service_account.json"))
-    )
+    cfg.database_url = str(_secret("database", "url", os.getenv("DATABASE_URL", "")) or "").strip()
+    # Kept as a compatibility token for existing service functions; no Google Sheets is used.
+    cfg.spreadsheet_key = "postgres"
+    cfg.database_path = cfg.database_url
+    cfg.service_account_file = ""
+    cfg.service_account_info = None
 
-    try:
-        cfg.service_account_info = dict(st.secrets["gcp_service_account"])
-    except Exception:
-        cfg.service_account_info = None
-
-    cfg.username = str(_secret("auth", "username", "admin"))
-    cfg.password = str(_secret("auth", "password", "admin123"))
+    cfg.username = str(_secret("auth", "username", os.getenv("ADMIN_USERNAME", "admin")))
+    cfg.password = str(_secret("auth", "password", os.getenv("ADMIN_PASSWORD", "")))
     cfg.app_title = str(_secret("auth", "app_title", "نظام إدارة مخزن المعمل"))
 
     return cfg
 
 
 def secrets_available() -> bool:
-    try:
-        st.secrets.get("gsheets", None)
-        return True
-    except Exception:
-        return False
+    return bool(os.getenv("DATABASE_URL") or _secret("database", "url", ""))

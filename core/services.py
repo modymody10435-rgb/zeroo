@@ -138,9 +138,7 @@ def normalize_timestamp(value: str = "") -> str:
 
 def _key() -> str:
     cfg = load_config()
-    if not cfg.spreadsheet_key:
-        raise DataError("لم يتم إعداد مفتاح Google Sheet في الإعدادات (secrets.toml).")
-    return cfg.spreadsheet_key
+    return cfg.spreadsheet_key or "postgres"
 
 
 # --------------------------------------------------------------------------- #

@@ -1,8 +1,6 @@
 streamlit
-gspread
-oauth2client
 pandas
-google-auth
 openpyxl
 pdfplumber>=0.11.0
 pymupdf>=1.24.0
+psycopg2-binary>=2.9.9

@@ -11,26 +11,26 @@ from core.styles import header
 
 
 def render() -> None:
-    header("⚙️ الإعدادات", "إعدادات الاتصال بـGoogle Sheets وأدوات النظام")
+    header("⚙️ الإعدادات", "إعدادات قاعدة البيانات PostgreSQL وأدوات النظام")
 
     cfg = load_config()
 
     st.markdown("### 🔌 حالة الاتصال")
     if not cfg.spreadsheet_key:
         st.error(
-            "لم يتم ضبط مفتاح Google Sheet. أضف `spreadsheet_key` في `.streamlit/secrets.toml` "
-            "ثم أعد تشغيل التطبيق."
+            "لم يتم إعداد اتصال PostgreSQL. اضبط DATABASE_URL في ملف .env أو "
+            "[database].url في .streamlit/secrets.toml ثم أعد تشغيل التطبيق."
         )
         _render_help()
         return
 
     col1, col2 = st.columns(2)
     with col1:
-        st.write("**مفتاح الملف:**")
-        masked = cfg.spreadsheet_key[:6] + "..." + cfg.spreadsheet_key[-4:] if len(cfg.spreadsheet_key) > 12 else "—"
+        st.write("**قاعدة البيانات:**")
+        masked = "PostgreSQL (عنوان الاتصال مخفي)" if cfg.database_url else "PostgreSQL (تحقق من الإعدادات)"
         st.code(masked)
     with col2:
-        method = "Streamlit Secrets [gcp_service_account]" if cfg.service_account_info else f"ملف: {cfg.service_account_file}"
+        method = "DATABASE_URL / Streamlit Secrets"
         st.write("**طريقة الاعتماد:**")
         st.code(method)
 
@@ -44,10 +44,10 @@ def render() -> None:
         except Exception as exc:  # noqa: BLE001
             st.error(f"فشل الاتصال: {exc}")
 
-    if st.button("🧱 إنشاء/فحص أوراق البيانات (Sheets)"):
+    if st.button("🧱 إنشاء/فحص جداول قاعدة البيانات"):
         try:
             ensure_schema(cfg.spreadsheet_key)
-            st.success("تم التأكد من وجود كل الأوراق المطلوبة: " + ", ".join(SHEETS.values()))
+            st.success("تم التأكد من جاهزية جداول قاعدة البيانات: " + ", ".join(SHEETS.values()))
         except Exception as exc:  # noqa: BLE001
             st.error(f"تعذر إنشاء الأوراق: {exc}")
 
@@ -81,20 +81,18 @@ def render() -> None:
 
 
 def _render_help() -> None:
-    with st.expander("📘 طريقة الإعداد (Google Sheets + Service Account)"):
+    with st.expander("📘 طريقة إعداد PostgreSQL"):
         st.markdown(
             """
-1. أنشئ مشروعًا على [Google Cloud Console](https://console.cloud.google.com/).
-2. فعّل **Google Sheets API** و**Google Drive API**.
-3. من **IAM & Admin → Service Accounts** أنشئ حساب خدمة، ثم أنشئ مفتاح **JSON** ونزّله.
-4. افتح Google Sheet، من مشاركة أضف بريد الـService Account (`...@....iam.gserviceaccount.com`) كـ**Editor**.
-5. انسخ مفتاح الملف من الرابط: `docs.google.com/spreadsheets/d/<KEY>/edit`.
-6. محليًا: ضع JSON باسم `service_account.json` بجانب `app.py`، وعدّل `.streamlit/secrets.toml`.
-7. على Streamlit Cloud: أضف محتوى JSON داخل `[gcp_service_account]` في Secrets.
+1. انسخ `.env.example` إلى `.env` واضبط كلمة مرور قوية لـ `POSTGRES_PASSWORD`.
+2. شغّل `docker compose -f docker-compose.streamlit.yml up -d --build`.
+3. تُحفظ بيانات PostgreSQL داخل مجلد المشروع `data/postgres-data/` وتستمر بعد إعادة تشغيل الحاويات.
+4. لا تحذف هذا المجلد أثناء تشغيل النظام، وخذ نسخة احتياطية قبل أي ترقية أو نقل.
+5. لا تشارك ملف `.env` أو ترفع كلمات المرور إلى GitHub.
             """
         )
         st.code(
-            '[gsheets]\nspreadsheet_key = "1AbC..."\n\n'
-            '[auth]\nusername = "admin"\npassword = "change-me"\napp_title = "نظام إدارة مخزن المعمل"',
+            '[database]\nurl = "postgresql://warehouse_user:YOUR_PASSWORD@localhost:5432/warehouse_db"\n\n'
+            '[auth]\nusername = "admin"\npassword = "CHANGE_ME_TO_A_LONG_RANDOM_PASSWORD"\napp_title = "نظام إدارة مخزن المعمل"',
             language="toml",
         )
