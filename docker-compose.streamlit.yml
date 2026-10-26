@@ -1,31 +1,13 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: warehouse_db
-      POSTGRES_USER: warehouse_user
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    volumes:
-      - ./data/postgres-data:/var/lib/postgresql/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U warehouse_user -d warehouse_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   streamlit:
     build:
       context: .
       dockerfile: Dockerfile.streamlit
     environment:
-      DATABASE_URL: postgresql://warehouse_user:${POSTGRES_PASSWORD}@postgres:5432/warehouse_db
-      AUTO_IMPORT_WORKBOOK: "1"
+      SQLITE_PATH: /app/data/warehouse.sqlite3
       WORKBOOK_PATH: /app/data/مخزن المعمل.xlsx
     ports:
       - "8501:8501"
-    depends_on:
-      postgres:
-        condition: service_healthy
+    volumes:
+      - ./data:/app/data
     restart: unless-stopped
-

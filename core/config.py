@@ -22,7 +22,7 @@ SHEETS = {
 
 @dataclass
 class AppConfig:
-    spreadsheet_key: str = "postgres"
+    spreadsheet_key: str = "sqlite"
     service_account_file: str = "service_account.json"
     service_account_info: Optional[Dict[str, Any]] = None
     username: str = "admin"
@@ -43,10 +43,10 @@ def _secret(section: str, key: str, default: Any = None) -> Any:
 def load_config() -> AppConfig:
     cfg = AppConfig()
 
-    cfg.database_url = str(_secret("database", "url", os.getenv("DATABASE_URL", "")) or "").strip()
-    # Kept as a compatibility token for existing service functions; no Google Sheets is used.
-    cfg.spreadsheet_key = "postgres"
-    cfg.database_path = cfg.database_url
+    cfg.database_url = ""
+    cfg.spreadsheet_key = "sqlite"
+    default_db = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "warehouse.sqlite3")
+    cfg.database_path = str(os.getenv("SQLITE_PATH", default_db)).strip()
     cfg.service_account_file = ""
     cfg.service_account_info = None
 
@@ -58,4 +58,4 @@ def load_config() -> AppConfig:
 
 
 def secrets_available() -> bool:
-    return bool(os.getenv("DATABASE_URL") or _secret("database", "url", ""))
+    return True

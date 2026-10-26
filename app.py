@@ -22,9 +22,9 @@
     - شارة المستخدم النشط أعلى الواجهة + زر تسجيل الخروج.
     - لوحة رئيسية بمؤشرات وآخر التحديثات وأزرار وصول سريع.
     - تخطيط متجاوب مع الهواتف المحمولة (عمود واحد + أهداف لمس أكبر).
-    - تخزين البيانات في PostgreSQL على السيرفر.
+    - تخزين البيانات في SQLite داخل مجلد المشروع.
 
-قاعدة البيانات: PostgreSQL على السيرفر، عبر DATABASE_URL.
+قاعدة البيانات: SQLite محلية داخل data/warehouse.sqlite3.
 """
 from __future__ import annotations
 
@@ -468,8 +468,8 @@ def _bootstrap() -> None:
         return
     cfg = load_config()
     try:
-        configure(cfg.database_url or cfg.database_path)
-        ensure_schema("postgres")
+        configure(cfg.database_path)
+        ensure_schema("sqlite")
         st.session_state["_db_ready"] = True
         st.session_state.pop("_db_error", None)
     except DataError as exc:
@@ -485,7 +485,7 @@ def _render_sync_pill() -> None:
     st.markdown(
         "<div style='display:inline-block;padding:5px 10px;border-radius:999px;"
         "background:#e7f7ee;color:#166534;font-size:12px;font-weight:600;'>"
-        "🗄️ التخزين المركزي: PostgreSQL</div>",
+        "🗄️ التخزين المحلي: SQLite</div>",
         unsafe_allow_html=True,
     )
 
@@ -1618,7 +1618,7 @@ def _render_edit_item() -> None:
             movement_type="تعديل رصيد",
             notes=f"تعديل يدوي للرصيد من {cur_stock:g} إلى {new_stock:g}",
         )
-    st.success(f"{msg} 🔄 التعديلات محفوظة في PostgreSQL.")
+    st.success(f"{msg} 🔄 التعديلات محفوظة في SQLite.")
     st.rerun()
 
 
@@ -1669,7 +1669,7 @@ def _render_product_delete_form(
     with st.form(f"delete_{form_key}_form"):
         st.markdown(f"#### {heading}")
         st.caption(
-            "سيُحذف الصنف نهائيًا من قاعدة بيانات PostgreSQL. "
+            "سيُحذف الصنف نهائيًا من قاعدة بيانات SQLite. "
             "تبقى سجلات السحوبات والحركات السابقة محفوظة."
         )
         choice = st.selectbox(
@@ -4884,7 +4884,7 @@ def _render_authority_forms_delete_form() -> None:
     with st.form("delete_authority_form_item_form"):
         st.markdown("#### 🗑️ حذف صنف استمارات الهيئة")
         st.caption(
-            "سيُحذف الصنف مع كل سجلات الوارد والصرف المرتبطة به من PostgreSQL، "
+            "سيُحذف الصنف مع كل سجلات الوارد والصرف المرتبطة به من SQLite، "
             "ويُخصم المتاح منه من رصيد استمارات الهيئة."
         )
         choice = st.selectbox(
@@ -6607,10 +6607,10 @@ def page_users() -> None:
 def main() -> None:
     cfg = load_config()
     try:
-        configure(cfg.database_url or cfg.database_path)
-        ensure_schema("postgres")
+        configure(cfg.database_path)
+        ensure_schema("sqlite")
     except Exception as exc:  # noqa: BLE001
-        st.session_state["_db_error"] = f"تعذر إعداد الاتصال بقاعدة PostgreSQL: {exc}"
+        st.session_state["_db_error"] = f"تعذر إعداد قاعدة SQLite: {exc}"
 
     if not is_logged_in():
         login_form()

@@ -1,5 +1,4 @@
-.git
-.gitignore
+\.git
 .venv
 venv
 __pycache__
@@ -9,14 +8,7 @@ __pycache__
 *.db
 *.db-wal
 *.db-shm
-data
+data/postgres-data
 .streamlit
-core
-views
-app.py
-app.spec
 build
 dist
-build_exe.ps1
-launcher.py
-README.md

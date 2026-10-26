@@ -1,4 +1,4 @@
-"""إدارة المستخدمين: تخزين في ورقة Users داخل Google Sheets مع تشفير كلمات المرور."""
+"""إدارة المستخدمين: تخزين في ورقة Users داخل قاعدة SQLite مع تشفير كلمات المرور."""
 from __future__ import annotations
 
 import hashlib
@@ -234,7 +234,7 @@ def get_user_lab_access(username: str = None) -> str:
         return ""  # لا توجد صلاحية دون هوية مستخدم مؤكدة
     user = find_user(username)
     if not user:
-        # Fail closed: a session user missing from PostgreSQL gets no lab access.
+        # Fail closed: a session user missing from SQLite gets no lab access.
         return ""
     lab = str(user.get("lab_access", LAB_ALL)).strip()
     return lab if lab in LABS else LAB_ALL

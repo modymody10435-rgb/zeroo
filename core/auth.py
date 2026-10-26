@@ -1,4 +1,4 @@
-"""مصادقة متعددة المستخدمين باستخدام حسابات PostgreSQL."""
+"""مصادقة متعددة المستخدمين باستخدام حسابات SQLite المحلية."""
 from __future__ import annotations
 
 import hmac
@@ -33,8 +33,6 @@ def _check(username: str, password: str):
     from core.users import authenticate, bootstrap_default_admin, find_user
 
     cfg = load_config()
-    if not cfg.database_url and not __import__("os").getenv("DATABASE_URL"):
-        return None, "لم يتم إعداد DATABASE_URL لقاعدة PostgreSQL في متغيرات البيئة أو .streamlit/secrets.toml."
     user = None
     database_error = ""
     try:
@@ -42,7 +40,7 @@ def _check(username: str, password: str):
         user = authenticate(username, password)
     except Exception as exc:  # noqa: BLE001
         database_error = str(exc)
-        LOGGER.warning("login: PostgreSQL error: %s", exc)
+        LOGGER.warning("login: SQLite error: %s", exc)
     if user:
         return user, ""
     # مسار احتياطي لحساب الأسرار المفرد (قبل تفعيل ورقة Users)
@@ -59,8 +57,8 @@ def _check(username: str, password: str):
     # تفسير سبب الرفض
     if database_error:
         return None, (
-            "تعذر الوصول إلى بيانات المستخدمين في PostgreSQL. "
-            f"تحقق من DATABASE_URL واتصال السيرفر. (التفاصيل: {database_error})"
+            "تعذر الوصول إلى بيانات المستخدمين في SQLite. "
+            f"تحقق من صلاحيات مجلد data. (التفاصيل: {database_error})"
         )
     LOGGER.warning("login: invalid credentials for user %r", username)
     return None, "اسم المستخدم أو كلمة المرور غير صحيحة."
